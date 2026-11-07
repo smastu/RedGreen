@@ -1,6 +1,9 @@
 // RedGreen：窓の赤・緑ボタンの動きを変える常駐アプリ
 //  緑ボタン … 全画面ではなく、画面いっぱい（Dock とメニューバーを除く）に広げる。もう一度で元の大きさ。⌥ を押しながらなら標準の動作
+//  緑ボタンを左右にドラッグ → 左半分・右半分、上にドラッグ → 画面いっぱい、長押し → 配置メニュー
 //  最後の窓を閉じたら（赤ボタンでも ⌘W でも）アプリを終了する。除外リストのアプリは終了しない
+//  しばらく使っていないアプリを自動で終了する（窓が 0 なら 10 分、窓があっても 30 分。Mac から離れている間は数えない）
+//  メニューバーから、ほかのアプリをまとめて終了
 import AppKit
 import ApplicationServices
 
@@ -21,7 +24,52 @@ local.matsumoto.ResourceWatch
 
 """
 
+let keepFile = supportDir.appendingPathComponent("keep_running.txt")
+let defaultKeep = """
+# 自動終了・「まとめて終了」の対象外にするアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視
+# exclude.txt に書いたアプリもこの対象外になる
+# ターミナル（Claude Code などが動いている）
+com.googlecode.iterm2
+com.apple.Terminal
+com.mitchellh.ghostty
+dev.warp.Warp-Stable
+net.kovidgoyal.kitty
+org.alacritty
+com.github.wez.wezterm
+# 連絡・通知を受けるアプリ
+local.shimpei.slacklite
+local.shimpei.teamslite
+# 音楽・会議
+com.apple.Music
+com.spotify.client
+us.zoom.xos
+com.microsoft.teams2
+com.apple.FaceTime
+
+"""
+
 enum Prefs {
+    /// 窓が 0 のアプリを自動終了するまでの分（0 ならしない）
+    static var idleNoWindow: Int {
+        get { UserDefaults.standard.object(forKey: "idleNoWindow") as? Int ?? 10 }
+        set { UserDefaults.standard.set(newValue, forKey: "idleNoWindow") }
+    }
+    /// 窓があるアプリを自動終了するまでの分（0 ならしない）
+    static var idleWindow: Int {
+        get { UserDefaults.standard.object(forKey: "idleWindow") as? Int ?? 30 }
+        set { UserDefaults.standard.set(newValue, forKey: "idleWindow") }
+    }
+    static func keep() -> Set<String> {
+        if !FileManager.default.fileExists(atPath: keepFile.path) {
+            try? defaultKeep.write(to: keepFile, atomically: true, encoding: .utf8)
+        }
+        let t = (try? String(contentsOf: keepFile, encoding: .utf8)) ?? defaultKeep
+        return Set(t.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }).union(excluded())
+    }
+    static func matches(_ app: NSRunningApplication, _ set: Set<String>) -> Bool {
+        set.contains((app.bundleIdentifier ?? "").lowercased()) || set.contains((app.localizedName ?? "").lowercased())
+    }
     static var green: Bool {
         get { UserDefaults.standard.object(forKey: "green") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "green") }
@@ -83,25 +131,102 @@ func visibleAXFrame(containing pt: CGPoint) -> CGRect {
 
 // MARK: - 緑ボタン
 
-/// 広げる前の大きさ（もう一度押したら戻す）
-var savedFrames: [(win: AXUIElement, frame: CGRect, filled: CGRect)] = []
+enum Layout { case fill, left, right }
 
-func fill(window w: AXUIElement) {
-    guard let p = axPoint(w), let s = axSize(w) else { return }
-    let cur = CGRect(origin: p, size: s)
-    let target = visibleAXFrame(containing: CGPoint(x: cur.midX, y: cur.midY))
+/// RedGreen が動かす前の大きさ（同じ配置をもう一度選んだら戻す）
+var savedFrames: [(win: AXUIElement, frame: CGRect, after: CGRect, layout: Layout)] = []
+
+func approx(_ a: CGRect, _ b: CGRect) -> Bool {
+    abs(a.minX - b.minX) < 8 && abs(a.minY - b.minY) < 8 && abs(a.width - b.width) < 8 && abs(a.height - b.height) < 8
+}
+
+func currentFrame(_ w: AXUIElement) -> CGRect? {
+    guard let p = axPoint(w), let s = axSize(w) else { return nil }
+    return CGRect(origin: p, size: s)
+}
+
+/// RedGreen が動かしたままの窓なら、動かす前の大きさ
+func originalFrame(_ w: AXUIElement) -> CGRect? {
+    guard let cur = currentFrame(w), let e = savedFrames.first(where: { CFEqual($0.win, w) }), approx(cur, e.after) else { return nil }
+    return e.frame
+}
+
+func place(_ w: AXUIElement, _ layout: Layout) {
+    guard let cur = currentFrame(w) else { return }
     savedFrames.removeAll { (attr($0.win, kAXRoleAttribute) as String?) == nil }   // 消えた窓は忘れる
-    if let i = savedFrames.firstIndex(where: { CFEqual($0.win, w) }),
-       abs(cur.minX - savedFrames[i].filled.minX) < 8, abs(cur.minY - savedFrames[i].filled.minY) < 8,
-       abs(cur.width - savedFrames[i].filled.width) < 8, abs(cur.height - savedFrames[i].filled.height) < 8 {
-        setFrame(w, savedFrames[i].frame)            // 広げたままなら元に戻す
+    var original = cur
+    if let i = savedFrames.firstIndex(where: { CFEqual($0.win, w) }) {
+        if approx(cur, savedFrames[i].after) {
+            original = savedFrames[i].frame
+            if savedFrames[i].layout == layout {                 // 同じ配置をもう一度 → 元に戻す
+                setFrame(w, original)
+                savedFrames.remove(at: i)
+                return
+            }
+        }
         savedFrames.remove(at: i)
-        return
     }
-    savedFrames.removeAll { CFEqual($0.win, w) }
+    let v = visibleAXFrame(containing: CGPoint(x: cur.midX, y: cur.midY))
+    let half = (v.width / 2).rounded()
+    let target: CGRect
+    switch layout {
+    case .fill: target = v
+    case .left: target = CGRect(x: v.minX, y: v.minY, width: half, height: v.height)
+    case .right: target = CGRect(x: v.minX + half, y: v.minY, width: v.width - half, height: v.height)
+    }
     setFrame(w, target)
-    let after = CGRect(origin: axPoint(w) ?? target.origin, size: axSize(w) ?? target.size)
-    savedFrames.append((w, cur, after))
+    savedFrames.append((w, original, currentFrame(w) ?? target, layout))
+}
+
+func restore(_ w: AXUIElement) {
+    guard let f = originalFrame(w) else { return }
+    setFrame(w, f)
+    savedFrames.removeAll { CFEqual($0.win, w) }
+}
+
+func fill(window w: AXUIElement) { place(w, .fill) }
+
+/// 緑ボタンを押してから離すまで
+var greenDown: (win: AXUIElement, loc: CGPoint, time: Date)?
+
+func greenReleased(_ g: (win: AXUIElement, loc: CGPoint, time: Date), at up: CGPoint) {
+    let dx = up.x - g.loc.x, dy = up.y - g.loc.y
+    if abs(dx) > 30, abs(dx) > abs(dy) { place(g.win, dx < 0 ? .left : .right); return }
+    if dy < -30 { place(g.win, .fill); return }
+    if Date().timeIntervalSince(g.time) > 0.45 { showLayoutMenu(g.win); return }
+    place(g.win, .fill)
+}
+
+/// 長押しで出す配置メニュー
+final class MenuAction: NSObject {
+    let f: () -> Void
+    init(_ f: @escaping () -> Void) { self.f = f }
+    @objc func run() { f() }
+}
+var menuActions: [MenuAction] = []
+
+func addItem(_ m: NSMenu, _ title: String, _ f: @escaping () -> Void) {
+    let a = MenuAction(f)
+    menuActions.append(a)
+    let it = m.addItem(withTitle: title, action: #selector(MenuAction.run), keyEquivalent: "")
+    it.target = a
+}
+
+func showLayoutMenu(_ w: AXUIElement) {
+    menuActions.removeAll()
+    let m = NSMenu()
+    addItem(m, "左半分") { place(w, .left) }
+    addItem(m, "右半分") { place(w, .right) }
+    addItem(m, "画面いっぱい") { place(w, .fill) }
+    if originalFrame(w) != nil {
+        m.addItem(.separator())
+        addItem(m, "元の大きさに戻す") { restore(w) }
+    }
+    m.addItem(.separator())
+    addItem(m, "全画面（macOS 標準）") {
+        AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanTrue)
+    }
+    m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
 }
 
 let systemWide = AXUIElementCreateSystemWide()
@@ -147,7 +272,15 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
-    if type == .leftMouseUp && swallowUp { swallowUp = false; return nil }
+    if type == .leftMouseUp && swallowUp {
+        swallowUp = false
+        if let g = greenDown {
+            greenDown = nil
+            let up = event.location
+            DispatchQueue.main.async { greenReleased(g, at: up) }
+        }
+        return nil
+    }
     if type == .keyDown {
         let f = event.flags
         if f.contains(.maskCommand), !f.contains(.maskControl), !f.contains(.maskAlternate),
@@ -181,8 +314,62 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         return Unmanaged.passUnretained(event)
     }
     swallowUp = true
-    DispatchQueue.main.async { fill(window: win) }
+    greenDown = (win, loc, Date())       // 離したときに、クリック・ドラッグ・長押しを見分ける
     return nil
+}
+
+// MARK: - 使っていないアプリの自動終了
+
+/// 「使っていない時間」は、Mac を使っている間（最後の操作から 2 分以内）だけ 1 分ずつ数える。
+/// 前面に来たら 0 に戻す。離席中に全部終了してしまうことはない
+final class IdleWatcher {
+    var inactive: [pid_t: Int] = [:]
+    var recent: [String] = []          // 最近自動終了したアプリ（メニューに出す）
+
+    init() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                self?.inactive[a.processIdentifier] = 0
+            }
+        }
+        nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                self?.inactive[a.processIdentifier] = nil
+            }
+        }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    func tick() {
+        guard Prefs.idleNoWindow > 0 || Prefs.idleWindow > 0 else { return }
+        let userIdle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        guard userIdle < 120 else { return }          // 離席中は数えない
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let keep = Prefs.keep()
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            let pid = app.processIdentifier
+            guard pid != getpid(), pid != front, !app.isTerminated, !Prefs.matches(app, keep) else { continue }
+            let n = (inactive[pid] ?? 0) + 1
+            inactive[pid] = n
+            let limit = standardWindowCount(pid) == 0 ? Prefs.idleNoWindow : Prefs.idleWindow
+            guard limit > 0, n >= limit else { continue }
+            let name = app.localizedName ?? "?"
+            log("自動終了：\(name)（\(n) 分使っていない）\(app.terminate())")
+            inactive[pid] = 0              // 保存の確認などで終わらなかったら、また同じ時間待つ
+            let df = DateFormatter(); df.dateFormat = "HH:mm"
+            recent.insert("\(df.string(from: Date())) \(name)", at: 0)
+            recent = Array(recent.prefix(5))
+        }
+    }
+}
+
+/// まとめて終了の対象（自分・前面のアプリも含め、対象外リスト以外の普通のアプリ）
+func quittableApps() -> [NSRunningApplication] {
+    let keep = Prefs.keep()
+    return NSWorkspace.shared.runningApplications.filter {
+        $0.activationPolicy == .regular && $0.processIdentifier != getpid() && !Prefs.matches($0, keep)
+    }.sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
 }
 
 // MARK: - 本体
@@ -190,6 +377,7 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var status: NSStatusItem!
     var started = false
+    var idle: IdleWatcher?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -213,6 +401,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !started else { return }
         started = true
         log("開始（許可あり）")
+        idle = IdleWatcher()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                 eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil)
@@ -230,15 +419,75 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             m.addItem(withTitle: "⚠︎ アクセシビリティの許可が必要です…", action: #selector(openAX), keyEquivalent: "").target = self
             m.addItem(.separator())
         }
-        let g = m.addItem(withTitle: "緑ボタンで画面いっぱいに広げる（⌥ で標準）", action: #selector(toggleGreen), keyEquivalent: "")
+        let g = m.addItem(withTitle: "緑ボタンで画面いっぱい・左右半分（⌥ で標準）", action: #selector(toggleGreen), keyEquivalent: "")
         g.target = self; g.state = Prefs.green ? .on : .off
         let q = m.addItem(withTitle: "最後の窓を閉じたらアプリを終了", action: #selector(toggleQuit), keyEquivalent: "")
         q.target = self; q.state = Prefs.quitLast ? .on : .off
         m.addItem(withTitle: "終了させないアプリを編集…", action: #selector(editExclude), keyEquivalent: "").target = self
         m.addItem(.separator())
+
+        // 自動終了
+        let auto = NSMenu()
+        func minutesMenu(_ title: String, _ cur: Int, _ set: @escaping (Int) -> Void) {
+            let sub = NSMenu()
+            for v in [0, 5, 10, 15, 30, 60, 120] {
+                let it = NSMenuItem(title: v == 0 ? "しない" : "\(v) 分", action: #selector(MenuAction.run), keyEquivalent: "")
+                let a = MenuAction { set(v) }
+                self.minuteActions.append(a)
+                it.target = a
+                it.state = v == cur ? .on : .off
+                sub.addItem(it)
+            }
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.submenu = sub
+            auto.addItem(item)
+        }
+        minuteActions.removeAll()
+        minutesMenu("窓がないアプリ：\(label(Prefs.idleNoWindow))", Prefs.idleNoWindow) { Prefs.idleNoWindow = $0 }
+        minutesMenu("窓があるアプリ：\(label(Prefs.idleWindow))", Prefs.idleWindow) { Prefs.idleWindow = $0 }
+        auto.addItem(.separator())
+        auto.addItem(withTitle: "対象外のアプリを編集…", action: #selector(editKeep), keyEquivalent: "").target = self
+        if let r = idle?.recent, !r.isEmpty {
+            auto.addItem(.separator())
+            auto.addItem(withTitle: "最近自動終了したアプリ", action: nil, keyEquivalent: "")
+            for x in r { auto.addItem(withTitle: "  " + x, action: nil, keyEquivalent: "") }
+        }
+        let autoItem = m.addItem(withTitle: "使っていないアプリを自動で終了", action: nil, keyEquivalent: "")
+        autoItem.submenu = auto
+
+        // まとめて終了
+        let apps = quittableApps()
+        let quit = NSMenu()
+        let all = quit.addItem(withTitle: "すべて終了（\(apps.count) 個）", action: #selector(quitAll), keyEquivalent: "")
+        all.target = self
+        all.isEnabled = !apps.isEmpty
+        quit.addItem(.separator())
+        for a in apps {
+            let it = NSMenuItem(title: a.localizedName ?? "?", action: #selector(MenuAction.run), keyEquivalent: "")
+            let act = MenuAction { log("メニューから終了：\(a.localizedName ?? "?") \(a.terminate())") }
+            minuteActions.append(act)
+            it.target = act
+            it.image = a.icon.map { i in let c = i.copy() as! NSImage; c.size = NSSize(width: 16, height: 16); return c }
+            quit.addItem(it)
+        }
+        quit.addItem(.separator())
+        quit.addItem(withTitle: "対象外：ターミナル・連絡アプリなど（編集…）", action: #selector(editKeep), keyEquivalent: "").target = self
+        let quitItem = m.addItem(withTitle: "アプリをまとめて終了", action: nil, keyEquivalent: "")
+        quitItem.submenu = quit
+        m.addItem(.separator())
         let l = m.addItem(withTitle: "ログイン時に起動", action: #selector(toggleLogin), keyEquivalent: "")
         l.target = self; l.state = loginOn ? .on : .off
         m.addItem(withTitle: "RedGreen を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+    var minuteActions: [MenuAction] = []
+    func label(_ v: Int) -> String { v == 0 ? "しない" : "\(v) 分" }
+    @objc func quitAll() {
+        for a in quittableApps() { log("まとめて終了：\(a.localizedName ?? "?") \(a.terminate())") }
+    }
+    @objc func editKeep() {
+        _ = Prefs.keep()
+        NSWorkspace.shared.open([keepFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration())
     }
     @objc func toggleGreen() { Prefs.green.toggle() }
     @objc func toggleQuit() { Prefs.quitLast.toggle() }
