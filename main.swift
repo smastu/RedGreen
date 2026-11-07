@@ -15,20 +15,19 @@ let supportDir: URL = {
     return d
 }()
 let excludeFile = supportDir.appendingPathComponent("exclude.txt")
-let defaultExclude = """
-# 最後の窓を閉じても終了させないアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視
+var defaultExclude: String { """
+\(L("file.exclude.header"))
 com.apple.finder
 local.shimpei.teamslite
 local.matsumoto.LiteDeck
 local.matsumoto.ResourceWatch
 
-"""
+""" }
 
 let keepFile = supportDir.appendingPathComponent("keep_running.txt")
-let defaultKeep = """
-# 自動終了・「まとめて終了」の対象外にするアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視
-# exclude.txt に書いたアプリもこの対象外になる
-# ターミナル（Claude Code などが動いている）
+var defaultKeep: String { """
+\(L("file.keep.header"))
+\(L("file.keep.terminals"))
 com.googlecode.iterm2
 com.apple.Terminal
 com.mitchellh.ghostty
@@ -36,17 +35,192 @@ dev.warp.Warp-Stable
 net.kovidgoyal.kitty
 org.alacritty
 com.github.wez.wezterm
-# 連絡・通知を受けるアプリ
+\(L("file.keep.messaging"))
 local.shimpei.slacklite
 local.shimpei.teamslite
-# 音楽・会議
+\(L("file.keep.media"))
 com.apple.Music
 com.spotify.client
 us.zoom.xos
 com.microsoft.teams2
 com.apple.FaceTime
 
-"""
+""" }
+
+// MARK: - 言語（Language）
+// 日本語・英語は内蔵。ほかの言語は「言語パッチ」（JSON）を置くと選べる：
+//   ~/Library/Application Support/RedGreen/lang/<言語コード>.json  または  RedGreen.app/Contents/Resources/lang/
+//   中身は {"_language": "表示名", "キー": "訳", ...}。足りないキーは英語になる。%@ は差し込み（数・順番を変えない）
+
+struct LangPack {
+    let id: String
+    let name: String
+    let table: [String: String]
+}
+
+enum Lang {
+    static let en: [String: String] = [
+        "menu.layout.left": "Left Half",
+        "menu.layout.right": "Right Half",
+        "menu.layout.fill": "Fill Screen",
+        "menu.layout.restore": "Restore Original Size",
+        "menu.layout.fullscreen": "Full Screen (macOS standard)",
+        "menu.needAX": "⚠︎ Accessibility permission required…",
+        "menu.green": "Green button: fill screen / halves (⌥ for standard)",
+        "menu.quitLast": "Quit app when its last window closes",
+        "menu.editExclude": "Edit apps that never quit…",
+        "menu.off": "Off",
+        "menu.minutes": "%@ min",
+        "menu.idle": "Auto-quit unused apps",
+        "menu.idle.noWindow": "Apps without windows: %@",
+        "menu.idle.window": "Apps with windows: %@",
+        "menu.idle.recent": "Recently auto-quit",
+        "menu.editKeep": "Edit excluded apps…",
+        "menu.quit": "Quit apps",
+        "menu.quit.all": "Quit all (%@)",
+        "menu.quit.note": "Excluded: terminals, messaging apps, etc. (Edit…)",
+        "menu.login": "Launch at login",
+        "menu.quitSelf": "Quit RedGreen",
+        "menu.minimizeAll": "Minimize All Windows to Dock",
+        "menu.restoreAll": "Restore Minimized Windows (%@)",
+        "log.minimizeAll": "Minimized all windows: %@",
+        "menu.language": "Language",
+        "menu.lang.auto": "Automatic (%@)",
+        "menu.lang.openFolder": "Open language patch folder…",
+        "menu.lang.export": "Export translation template…",
+        "why.red": "Red button",
+        "why.cmdW": "⌘W",
+        "log.launch": "Launched (permission=%@)",
+        "log.start": "Started (permission granted)",
+        "log.quitLast": "%@: %@ has no windows → quit %@",
+        "log.autoQuit": "Auto-quit: %@ (unused for %@ min) %@",
+        "log.menuQuit": "Quit from menu: %@ %@",
+        "log.quitAll": "Quit all: %@ %@",
+        "file.exclude.header": "# Apps that won't quit when their last window closes (one per line: app name or bundle ID). Lines starting with # are ignored",
+        "file.keep.header": "# Apps never auto-quit or quit by \"Quit all\" (one per line: app name or bundle ID). Lines starting with # are ignored\n# Apps listed in exclude.txt are excluded too",
+        "file.keep.terminals": "# Terminals (Claude Code etc. may be running)",
+        "file.keep.messaging": "# Messaging / notification apps",
+        "file.keep.media": "# Music / meetings",
+    ]
+
+    static let ja: [String: String] = [
+        "menu.layout.left": "左半分",
+        "menu.layout.right": "右半分",
+        "menu.layout.fill": "画面いっぱい",
+        "menu.layout.restore": "元の大きさに戻す",
+        "menu.layout.fullscreen": "全画面（macOS 標準）",
+        "menu.needAX": "⚠︎ アクセシビリティの許可が必要です…",
+        "menu.green": "緑ボタンで画面いっぱい・左右半分（⌥ で標準）",
+        "menu.quitLast": "最後の窓を閉じたらアプリを終了",
+        "menu.editExclude": "終了させないアプリを編集…",
+        "menu.off": "しない",
+        "menu.minutes": "%@ 分",
+        "menu.idle": "使っていないアプリを自動で終了",
+        "menu.idle.noWindow": "窓がないアプリ：%@",
+        "menu.idle.window": "窓があるアプリ：%@",
+        "menu.idle.recent": "最近自動終了したアプリ",
+        "menu.editKeep": "対象外のアプリを編集…",
+        "menu.quit": "アプリをまとめて終了",
+        "menu.quit.all": "すべて終了（%@ 個）",
+        "menu.quit.note": "対象外：ターミナル・連絡アプリなど（編集…）",
+        "menu.login": "ログイン時に起動",
+        "menu.quitSelf": "RedGreen を終了",
+        "menu.minimizeAll": "すべての窓を Dock にしまう",
+        "menu.restoreAll": "しまった窓を戻す（%@ 枚）",
+        "log.minimizeAll": "すべての窓を Dock にしまった：%@ 枚",
+        "menu.language": "言語（Language）",
+        "menu.lang.auto": "自動（%@）",
+        "menu.lang.openFolder": "言語パッチのフォルダを開く…",
+        "menu.lang.export": "翻訳用のひな形を書き出す…",
+        "why.red": "赤ボタン",
+        "why.cmdW": "⌘W",
+        "log.launch": "起動 許可=%@",
+        "log.start": "開始（許可あり）",
+        "log.quitLast": "%@：%@ の窓が 0 → 終了 %@",
+        "log.autoQuit": "自動終了：%@（%@ 分使っていない）%@",
+        "log.menuQuit": "メニューから終了：%@ %@",
+        "log.quitAll": "まとめて終了：%@ %@",
+        "file.exclude.header": "# 最後の窓を閉じても終了させないアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視",
+        "file.keep.header": "# 自動終了・「まとめて終了」の対象外にするアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視\n# exclude.txt に書いたアプリもこの対象外になる",
+        "file.keep.terminals": "# ターミナル（Claude Code などが動いている）",
+        "file.keep.messaging": "# 連絡・通知を受けるアプリ",
+        "file.keep.media": "# 音楽・会議",
+    ]
+
+    static let userDir: URL = {
+        let d = supportDir.appendingPathComponent("lang")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+
+    /// 選べる言語：内蔵（en, ja）＋アプリ同梱のパッチ＋ユーザーのパッチ（同じ id なら後のものが優先）
+    static func packs() -> [LangPack] {
+        var byID: [String: LangPack] = [
+            "en": LangPack(id: "en", name: "English", table: en),
+            "ja": LangPack(id: "ja", name: "日本語", table: ja),
+        ]
+        let dirs = [Bundle.main.resourceURL?.appendingPathComponent("lang"), userDir].compactMap { $0 }
+        for dir in dirs {
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for f in files where f.pathExtension == "json" && !f.lastPathComponent.hasPrefix("_") {
+                guard let d = try? Data(contentsOf: f),
+                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { continue }
+                let id = f.deletingPathExtension().lastPathComponent
+                let base = byID[id]?.table ?? [:]                 // 内蔵言語への上書きは差分だけでよい
+                byID[id] = LangPack(id: id, name: obj["_language"] ?? byID[id]?.name ?? id,
+                                    table: base.merging(obj) { _, new in new })
+            }
+        }
+        return byID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// "auto" または言語の id
+    static var setting: String {
+        get { UserDefaults.standard.string(forKey: "language") ?? "auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "language"); reload() }
+    }
+
+    /// 「自動」のときに使う言語：システムの優先言語の順に、合うものを探す
+    static func autoPack(_ all: [LangPack]) -> LangPack {
+        for pref in Locale.preferredLanguages {
+            let parts = pref.split(separator: "-").map(String.init)
+            var candidates = [pref]
+            if parts.count >= 2 { candidates.append(parts[0] + "-" + parts[1]) }   // zh-Hans-JP → zh-Hans
+            candidates.append(parts[0])                                            // ja-JP → ja
+            for c in candidates {
+                if let p = all.first(where: { $0.id.caseInsensitiveCompare(c) == .orderedSame }) { return p }
+            }
+        }
+        return all.first { $0.id == "en" }!
+    }
+
+    static var current: LangPack = resolve()
+
+    static func resolve() -> LangPack {
+        let all = packs()
+        if setting != "auto", let p = all.first(where: { $0.id == setting }) { return p }
+        return autoPack(all)
+    }
+
+    static func reload() { current = resolve() }
+
+    /// 翻訳用のひな形（英語）を書き出す
+    static func exportTemplate() -> URL {
+        var t = en
+        t["_language"] = "Your language name (e.g. Français)"
+        let url = userDir.appendingPathComponent("_template.json")
+        if let d = try? JSONSerialization.data(withJSONObject: t, options: [.prettyPrinted, .sortedKeys]) {
+            try? d.write(to: url)
+        }
+        return url
+    }
+}
+
+/// 表示する文字列（%@ に args を順に差し込む）
+func L(_ key: String, _ args: String...) -> String {
+    let f = Lang.current.table[key] ?? Lang.en[key] ?? key
+    return args.isEmpty ? f : String(format: f, arguments: args.map { $0 as NSString })
+}
 
 enum Prefs {
     /// 窓が 0 のアプリを自動終了するまでの分（0 ならしない）
@@ -215,15 +389,15 @@ func addItem(_ m: NSMenu, _ title: String, _ f: @escaping () -> Void) {
 func showLayoutMenu(_ w: AXUIElement) {
     menuActions.removeAll()
     let m = NSMenu()
-    addItem(m, "左半分") { place(w, .left) }
-    addItem(m, "右半分") { place(w, .right) }
-    addItem(m, "画面いっぱい") { place(w, .fill) }
+    addItem(m, L("menu.layout.left")) { place(w, .left) }
+    addItem(m, L("menu.layout.right")) { place(w, .right) }
+    addItem(m, L("menu.layout.fill")) { place(w, .fill) }
     if originalFrame(w) != nil {
         m.addItem(.separator())
-        addItem(m, "元の大きさに戻す") { restore(w) }
+        addItem(m, L("menu.layout.restore")) { restore(w) }
     }
     m.addItem(.separator())
-    addItem(m, "全画面（macOS 標準）") {
+    addItem(m, L("menu.layout.fullscreen")) {
         AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanTrue)
     }
     m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
@@ -258,7 +432,7 @@ func checkQuit(pid: pid_t, before: Int, why: String) {
             guard !app.isTerminated else { pendingQuit.remove(pid); return }
             let n = standardWindowCount(pid)
             if n == 0 {
-                log("\(why)：\(app.localizedName ?? "?") の窓が 0 → 終了 \(app.terminate())")
+                log(L("log.quitLast", why, app.localizedName ?? "?", "\(app.terminate())"))
                 pendingQuit.remove(pid)
             } else { step() }
         }
@@ -288,7 +462,7 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
            let front = NSWorkspace.shared.frontmostApplication {
             let pid = front.processIdentifier
             let before = Prefs.quitLast ? standardWindowCount(pid) : 0
-            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: "⌘W") }
+            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.cmdW")) }
         }
         return Unmanaged.passUnretained(event)
     }
@@ -304,7 +478,7 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         var pid: pid_t = 0
         if Prefs.quitLast, AXUIElementGetPid(e, &pid) == .success {
             let before = standardWindowCount(pid)
-            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: "赤ボタン") }
+            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.red")) }
         }
         return Unmanaged.passUnretained(event)
     }
@@ -355,13 +529,42 @@ final class IdleWatcher {
             let limit = standardWindowCount(pid) == 0 ? Prefs.idleNoWindow : Prefs.idleWindow
             guard limit > 0, n >= limit else { continue }
             let name = app.localizedName ?? "?"
-            log("自動終了：\(name)（\(n) 分使っていない）\(app.terminate())")
+            log(L("log.autoQuit", name, "\(n)", "\(app.terminate())"))
             inactive[pid] = 0              // 保存の確認などで終わらなかったら、また同じ時間待つ
             let df = DateFormatter(); df.dateFormat = "HH:mm"
             recent.insert("\(df.string(from: Date())) \(name)", at: 0)
             recent = Array(recent.prefix(5))
         }
     }
+}
+
+// MARK: - すべての窓を Dock にしまう
+
+/// RedGreen がしまった窓（「戻す」で元に戻す）
+var minimizedByUs: [AXUIElement] = []
+
+func minimizeAllWindows() {
+    var done: [AXUIElement] = []
+    for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid() {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.5)
+        let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+        for w in ws where (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+                       && (attr(w, kAXMinimizedAttribute) as Bool?) != true {
+            if AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
+                done.append(w)
+            }
+        }
+    }
+    minimizedByUs = done
+    log(L("log.minimizeAll", "\(done.count)"))
+}
+
+func restoreMinimizedWindows() {
+    for w in minimizedByUs.reversed() where (attr(w, kAXMinimizedAttribute) as Bool?) == true {
+        AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+    }
+    minimizedByUs = []
 }
 
 /// まとめて終了の対象（自分・前面のアプリも含め、対象外リスト以外の普通のアプリ）
@@ -388,7 +591,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // アクセシビリティの許可を待ってから始める（許可されるまで 2 秒ごとに確認）
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        log("起動 許可=\(AXIsProcessTrusted())")
+        log(L("log.launch", "\(AXIsProcessTrusted())"))
         if AXIsProcessTrustedWithOptions(opts) { startAll() }
         else {
             Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
@@ -400,7 +603,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func startAll() {
         guard !started else { return }
         started = true
-        log("開始（許可あり）")
+        log(L("log.start"))
         idle = IdleWatcher()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
@@ -416,14 +619,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ m: NSMenu) {
         m.removeAllItems()
         if !AXIsProcessTrusted() {
-            m.addItem(withTitle: "⚠︎ アクセシビリティの許可が必要です…", action: #selector(openAX), keyEquivalent: "").target = self
+            m.addItem(withTitle: L("menu.needAX"), action: #selector(openAX), keyEquivalent: "").target = self
             m.addItem(.separator())
         }
-        let g = m.addItem(withTitle: "緑ボタンで画面いっぱい・左右半分（⌥ で標準）", action: #selector(toggleGreen), keyEquivalent: "")
+        let g = m.addItem(withTitle: L("menu.green"), action: #selector(toggleGreen), keyEquivalent: "")
         g.target = self; g.state = Prefs.green ? .on : .off
-        let q = m.addItem(withTitle: "最後の窓を閉じたらアプリを終了", action: #selector(toggleQuit), keyEquivalent: "")
+        let q = m.addItem(withTitle: L("menu.quitLast"), action: #selector(toggleQuit), keyEquivalent: "")
         q.target = self; q.state = Prefs.quitLast ? .on : .off
-        m.addItem(withTitle: "終了させないアプリを編集…", action: #selector(editExclude), keyEquivalent: "").target = self
+        m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
+        m.addItem(.separator())
+
+        m.addItem(withTitle: L("menu.minimizeAll"), action: #selector(minimizeAll), keyEquivalent: "").target = self
+        let stillMin = minimizedByUs.filter { (attr($0, kAXMinimizedAttribute) as Bool?) == true }
+        if !stillMin.isEmpty {
+            m.addItem(withTitle: L("menu.restoreAll", "\(stillMin.count)"), action: #selector(restoreAll), keyEquivalent: "").target = self
+        }
         m.addItem(.separator())
 
         // 自動終了
@@ -431,7 +641,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func minutesMenu(_ title: String, _ cur: Int, _ set: @escaping (Int) -> Void) {
             let sub = NSMenu()
             for v in [0, 5, 10, 15, 30, 60, 120] {
-                let it = NSMenuItem(title: v == 0 ? "しない" : "\(v) 分", action: #selector(MenuAction.run), keyEquivalent: "")
+                let it = NSMenuItem(title: label(v), action: #selector(MenuAction.run), keyEquivalent: "")
                 let a = MenuAction { set(v) }
                 self.minuteActions.append(a)
                 it.target = a
@@ -443,47 +653,75 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             auto.addItem(item)
         }
         minuteActions.removeAll()
-        minutesMenu("窓がないアプリ：\(label(Prefs.idleNoWindow))", Prefs.idleNoWindow) { Prefs.idleNoWindow = $0 }
-        minutesMenu("窓があるアプリ：\(label(Prefs.idleWindow))", Prefs.idleWindow) { Prefs.idleWindow = $0 }
+        minutesMenu(L("menu.idle.noWindow", label(Prefs.idleNoWindow)), Prefs.idleNoWindow) { Prefs.idleNoWindow = $0 }
+        minutesMenu(L("menu.idle.window", label(Prefs.idleWindow)), Prefs.idleWindow) { Prefs.idleWindow = $0 }
         auto.addItem(.separator())
-        auto.addItem(withTitle: "対象外のアプリを編集…", action: #selector(editKeep), keyEquivalent: "").target = self
+        auto.addItem(withTitle: L("menu.editKeep"), action: #selector(editKeep), keyEquivalent: "").target = self
         if let r = idle?.recent, !r.isEmpty {
             auto.addItem(.separator())
-            auto.addItem(withTitle: "最近自動終了したアプリ", action: nil, keyEquivalent: "")
+            auto.addItem(withTitle: L("menu.idle.recent"), action: nil, keyEquivalent: "")
             for x in r { auto.addItem(withTitle: "  " + x, action: nil, keyEquivalent: "") }
         }
-        let autoItem = m.addItem(withTitle: "使っていないアプリを自動で終了", action: nil, keyEquivalent: "")
+        let autoItem = m.addItem(withTitle: L("menu.idle"), action: nil, keyEquivalent: "")
         autoItem.submenu = auto
 
         // まとめて終了
         let apps = quittableApps()
         let quit = NSMenu()
-        let all = quit.addItem(withTitle: "すべて終了（\(apps.count) 個）", action: #selector(quitAll), keyEquivalent: "")
+        let all = quit.addItem(withTitle: L("menu.quit.all", "\(apps.count)"), action: #selector(quitAll), keyEquivalent: "")
         all.target = self
         all.isEnabled = !apps.isEmpty
         quit.addItem(.separator())
         for a in apps {
             let it = NSMenuItem(title: a.localizedName ?? "?", action: #selector(MenuAction.run), keyEquivalent: "")
-            let act = MenuAction { log("メニューから終了：\(a.localizedName ?? "?") \(a.terminate())") }
+            let act = MenuAction { log(L("log.menuQuit", a.localizedName ?? "?", "\(a.terminate())")) }
             minuteActions.append(act)
             it.target = act
             it.image = a.icon.map { i in let c = i.copy() as! NSImage; c.size = NSSize(width: 16, height: 16); return c }
             quit.addItem(it)
         }
         quit.addItem(.separator())
-        quit.addItem(withTitle: "対象外：ターミナル・連絡アプリなど（編集…）", action: #selector(editKeep), keyEquivalent: "").target = self
-        let quitItem = m.addItem(withTitle: "アプリをまとめて終了", action: nil, keyEquivalent: "")
+        quit.addItem(withTitle: L("menu.quit.note"), action: #selector(editKeep), keyEquivalent: "").target = self
+        let quitItem = m.addItem(withTitle: L("menu.quit"), action: nil, keyEquivalent: "")
         quitItem.submenu = quit
         m.addItem(.separator())
-        let l = m.addItem(withTitle: "ログイン時に起動", action: #selector(toggleLogin), keyEquivalent: "")
+        // 言語
+        let langMenu = NSMenu()
+        let packs = Lang.packs()
+        let autoItem2 = NSMenuItem(title: L("menu.lang.auto", Lang.autoPack(packs).name), action: #selector(MenuAction.run), keyEquivalent: "")
+        let autoAct = MenuAction { Lang.setting = "auto" }
+        minuteActions.append(autoAct)
+        autoItem2.target = autoAct
+        autoItem2.state = Lang.setting == "auto" ? .on : .off
+        langMenu.addItem(autoItem2)
+        langMenu.addItem(.separator())
+        for p in packs {
+            let it = NSMenuItem(title: p.name, action: #selector(MenuAction.run), keyEquivalent: "")
+            let act = MenuAction { Lang.setting = p.id }
+            minuteActions.append(act)
+            it.target = act
+            it.state = Lang.setting == p.id ? .on : .off
+            langMenu.addItem(it)
+        }
+        langMenu.addItem(.separator())
+        langMenu.addItem(withTitle: L("menu.lang.openFolder"), action: #selector(openLangFolder), keyEquivalent: "").target = self
+        langMenu.addItem(withTitle: L("menu.lang.export"), action: #selector(exportLang), keyEquivalent: "").target = self
+        let langItem = m.addItem(withTitle: L("menu.language"), action: nil, keyEquivalent: "")
+        langItem.submenu = langMenu
+        m.addItem(.separator())
+        let l = m.addItem(withTitle: L("menu.login"), action: #selector(toggleLogin), keyEquivalent: "")
         l.target = self; l.state = loginOn ? .on : .off
-        m.addItem(withTitle: "RedGreen を終了", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        m.addItem(withTitle: L("menu.quitSelf"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
     var minuteActions: [MenuAction] = []
-    func label(_ v: Int) -> String { v == 0 ? "しない" : "\(v) 分" }
+    func label(_ v: Int) -> String { v == 0 ? L("menu.off") : L("menu.minutes", "\(v)") }
     @objc func quitAll() {
-        for a in quittableApps() { log("まとめて終了：\(a.localizedName ?? "?") \(a.terminate())") }
+        for a in quittableApps() { log(L("log.quitAll", a.localizedName ?? "?", "\(a.terminate())")) }
     }
+    @objc func minimizeAll() { minimizeAllWindows() }
+    @objc func restoreAll() { restoreMinimizedWindows() }
+    @objc func openLangFolder() { NSWorkspace.shared.open(Lang.userDir) }
+    @objc func exportLang() { NSWorkspace.shared.activateFileViewerSelecting([Lang.exportTemplate()]) }
     @objc func editKeep() {
         _ = Prefs.keep()
         NSWorkspace.shared.open([keepFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),

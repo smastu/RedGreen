@@ -9,11 +9,25 @@
 - 終了させないアプリ：`~/Library/Application Support/RedGreen/exclude.txt`（アプリ名かバンドル ID。初期値は Finder・MSLite・LiteDeck・ResourceWatch）
 - **使っていないアプリを自動で終了**：窓が 0 のまま 10 分、窓があっても 30 分、前面に出していないアプリを終了（時間はメニューで変更・オフ可）。
   Mac を使っている間（最後の操作から 2 分以内）だけ数えるので、離席中にまとめて終了することはない。保存の確認が出たら終了しない
+- **すべての窓を Dock にしまう**：全アプリの窓をまとめて最小化（標準の ⌥⌘M は前面のアプリだけ）。「しまった窓を戻す」で元どおり
 - **アプリをまとめて終了**：メニューバーから、対象外以外のアプリを全部、または 1 つずつ終了
 - 自動終了・まとめて終了の対象外：`~/Library/Application Support/RedGreen/keep_running.txt`（初期値はターミナル類・SlackLite・MSLite・音楽・会議アプリ）と exclude.txt のアプリ
 - メニューバーのアイコンから、それぞれのオン・オフ、除外リストの編集、ログイン時の起動（LaunchAgent `local.matsumoto.RedGreen`）
 
 アクセシビリティの許可が必要（システム設定 → プライバシーとセキュリティ → アクセシビリティ）。
+
+## 言語（Language）
+日本語・英語を内蔵。メニュー「言語（Language）」で切り替え（「自動」はシステムの優先言語に合わせる）。
+ほかの言語は **言語パッチ**（JSON）で追加できる：
+
+1. メニュー「言語」→「翻訳用のひな形を書き出す…」で `_template.json`（英語）ができる
+2. 訳して `<言語コード>.json`（例 `fr.json`、`zh-Hans.json`）の名前で
+   `~/Library/Application Support/RedGreen/lang/` に置く。`"_language"` に表示名を書く
+3. メニューに出るので選ぶ（再起動不要）
+
+- 足りないキーは英語で表示。`%@` は差し込み位置なので数を変えない
+- 内蔵の日本語・英語も、`ja.json` / `en.json` を置けば一部だけ上書きできる
+- リポジトリの `lang/` に置いたパッチはアプリに同梱される（例：`lang/zh-Hans.json` 简体中文）
 
 ## ビルド
 `./build.sh` → `~/Applications/RedGreen.app`。

@@ -8,6 +8,9 @@ swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main
 cp build/RedGreen "$APP/Contents/MacOS/.RedGreen.new"
 mv -f "$APP/Contents/MacOS/.RedGreen.new" "$APP/Contents/MacOS/RedGreen"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# 言語パッチ（lang/*.json）を同梱
+rm -rf "$APP/Contents/Resources/lang" && mkdir -p "$APP/Contents/Resources/lang"
+cp lang/*.json "$APP/Contents/Resources/lang/" 2>/dev/null || true
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
