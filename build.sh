@@ -4,7 +4,7 @@ set -e
 cd "${0:a:h}"
 APP="$HOME/Applications/RedGreen.app"
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift -o build/RedGreen
+swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift -o build/RedGreen
 cp build/RedGreen "$APP/Contents/MacOS/.RedGreen.new"
 mv -f "$APP/Contents/MacOS/.RedGreen.new" "$APP/Contents/MacOS/RedGreen"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -22,6 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
+<key>NSAppleEventsUsageDescription</key><string>Finder のアドレス欄に今のフォルダを表示・移動するために使います / Used to show and change the current Finder folder in the address bar.</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 </dict></plist>
 PL

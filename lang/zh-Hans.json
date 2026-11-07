@@ -34,5 +34,15 @@
   "log.autoQuit": "自动退出：%@（%@ 分钟未使用）%@",
   "log.menuQuit": "从菜单退出：%@ %@",
   "log.quitAll": "全部退出：%@ %@",
-  "log.minimizeAll": "已将所有窗口最小化：%@ 个"
+  "log.minimizeAll": "已将所有窗口最小化：%@ 个",
+  "menu.layout.withFinder": "与访达并排",
+  "menu.finder.withApp": "将 %@ 与访达并排",
+  "menu.finder.two": "两个访达窗口并排",
+  "menu.switcher": "⌘Tab 按窗口切换（类似 Windows 的 Alt+Tab）",
+  "menu.finderBar": "在访达中显示可编辑的地址栏",
+  "switch.minimized": "（已最小化）",
+  "switch.hidden": "（已隐藏）",
+  "switch.noWindow": "（无窗口）",
+  "finderBar.placeholder": "输入路径后按 Return",
+  "finderBar.needPermission": "请允许 RedGreen 控制访达：系统设置 → 隐私与安全性 → 自动化"
 }

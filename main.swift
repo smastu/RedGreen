@@ -81,6 +81,16 @@ enum Lang {
         "menu.quit.note": "Excluded: terminals, messaging apps, etc. (Edit…)",
         "menu.login": "Launch at login",
         "menu.quitSelf": "Quit RedGreen",
+        "menu.layout.withFinder": "Side by Side with Finder",
+        "menu.finder.withApp": "Put %@ and Finder Side by Side",
+        "menu.finder.two": "Two Finder Windows Side by Side",
+        "menu.switcher": "⌘Tab Switches Windows (like Windows Alt+Tab)",
+        "menu.finderBar": "Editable Address Bar in Finder",
+        "switch.minimized": "(minimized)",
+        "switch.hidden": "(hidden)",
+        "switch.noWindow": "(no windows)",
+        "finderBar.placeholder": "Type a path and press Return",
+        "finderBar.needPermission": "Allow RedGreen to control Finder: System Settings → Privacy & Security → Automation",
         "menu.minimizeAll": "Minimize All Windows to Dock",
         "menu.restoreAll": "Restore Minimized Windows (%@)",
         "log.minimizeAll": "Minimized all windows: %@",
@@ -125,6 +135,16 @@ enum Lang {
         "menu.quit.note": "対象外：ターミナル・連絡アプリなど（編集…）",
         "menu.login": "ログイン時に起動",
         "menu.quitSelf": "RedGreen を終了",
+        "menu.layout.withFinder": "Finder と横に並べる",
+        "menu.finder.withApp": "%@ と Finder を横に並べる",
+        "menu.finder.two": "Finder を 2 つ横に並べる",
+        "menu.switcher": "⌘Tab で窓ごとに切り替える（Windows の Alt+Tab 風）",
+        "menu.finderBar": "Finder に編集できるアドレス欄を出す",
+        "switch.minimized": "（最小化）",
+        "switch.hidden": "（非表示）",
+        "switch.noWindow": "（窓なし）",
+        "finderBar.placeholder": "パスを入力して Return",
+        "finderBar.needPermission": "Finder の操作を許可してください（システム設定 → プライバシーとセキュリティ → オートメーション）",
         "menu.minimizeAll": "すべての窓を Dock にしまう",
         "menu.restoreAll": "しまった窓を戻す（%@ 枚）",
         "log.minimizeAll": "すべての窓を Dock にしまった：%@ 枚",
@@ -286,13 +306,19 @@ func axSize(_ e: AXUIElement) -> CGSize? {
     guard let v: AXValue = attr(e, kAXSizeAttribute) else { return nil }
     var s = CGSize.zero; AXValueGetValue(v, .cgSize, &s); return s
 }
-func setFrame(_ w: AXUIElement, _ r: CGRect) {
+func setFrame(_ w: AXUIElement, _ r: CGRect, retries: Int = 4, done: ((CGRect) -> Void)? = nil) {
     var p = r.origin, s = r.size
     let pv = AXValueCreate(.cgPoint, &p)!, sv = AXValueCreate(.cgSize, &s)!
     // 位置 → 大きさ → 位置（画面の端で大きさが削られないように）
     AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
     AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv)
     AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
+    // Finder などは反映が遅れて取りこぼすことがあるので、少し待って確かめ、ずれていればやり直す
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        guard let cur = currentFrame(w) else { return }
+    if retries > 0, !approx(cur, r) { setFrame(w, r, retries: retries - 1, done: done) }
+        else { done?(cur) }
+    }
 }
 
 /// 画面の使える範囲を、アクセシビリティの座標（左上が原点、下向きが正）で返す
@@ -325,14 +351,15 @@ func originalFrame(_ w: AXUIElement) -> CGRect? {
     return e.frame
 }
 
-func place(_ w: AXUIElement, _ layout: Layout) {
+/// toggle：同じ配置がもう一度選ばれたら元に戻す。screen：並べる画面（省略時は窓のある画面）
+func place(_ w: AXUIElement, _ layout: Layout, toggle: Bool = true, screen: CGRect? = nil) {
     guard let cur = currentFrame(w) else { return }
     savedFrames.removeAll { (attr($0.win, kAXRoleAttribute) as String?) == nil }   // 消えた窓は忘れる
     var original = cur
     if let i = savedFrames.firstIndex(where: { CFEqual($0.win, w) }) {
         if approx(cur, savedFrames[i].after) {
             original = savedFrames[i].frame
-            if savedFrames[i].layout == layout {                 // 同じ配置をもう一度 → 元に戻す
+            if toggle, savedFrames[i].layout == layout {         // 同じ配置をもう一度 → 元に戻す
                 setFrame(w, original)
                 savedFrames.remove(at: i)
                 return
@@ -340,7 +367,7 @@ func place(_ w: AXUIElement, _ layout: Layout) {
         }
         savedFrames.remove(at: i)
     }
-    let v = visibleAXFrame(containing: CGPoint(x: cur.midX, y: cur.midY))
+    let v = screen ?? visibleAXFrame(containing: CGPoint(x: cur.midX, y: cur.midY))
     let half = (v.width / 2).rounded()
     let target: CGRect
     switch layout {
@@ -348,8 +375,10 @@ func place(_ w: AXUIElement, _ layout: Layout) {
     case .left: target = CGRect(x: v.minX, y: v.minY, width: half, height: v.height)
     case .right: target = CGRect(x: v.minX + half, y: v.minY, width: v.width - half, height: v.height)
     }
-    setFrame(w, target)
-    savedFrames.append((w, original, currentFrame(w) ?? target, layout))
+    savedFrames.append((w, original, target, layout))
+    setFrame(w, target) { actual in                        // アプリが大きさを調整したら、その大きさを覚える
+        if let i = savedFrames.firstIndex(where: { CFEqual($0.win, w) }) { savedFrames[i].after = actual }
+    }
 }
 
 func restore(_ w: AXUIElement) {
@@ -392,6 +421,8 @@ func showLayoutMenu(_ w: AXUIElement) {
     addItem(m, L("menu.layout.left")) { place(w, .left) }
     addItem(m, L("menu.layout.right")) { place(w, .right) }
     addItem(m, L("menu.layout.fill")) { place(w, .fill) }
+    m.addItem(.separator())
+    addItem(m, L("menu.layout.withFinder")) { arrangeWithFinder(w) }
     if originalFrame(w) != nil {
         m.addItem(.separator())
         addItem(m, L("menu.layout.restore")) { restore(w) }
@@ -446,6 +477,8 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
+    if (type == .keyDown || type == .flagsChanged) && Switcher.shared.handle(type, event) { return nil }
+    if type == .flagsChanged { return Unmanaged.passUnretained(event) }
     if type == .leftMouseUp && swallowUp {
         swallowUp = false
         if let g = greenDown {
@@ -538,6 +571,93 @@ final class IdleWatcher {
     }
 }
 
+// MARK: - Finder と横に並べる（コピー・アップロード用）
+
+/// 普通の窓（最小化していないもの）を前から順に
+func visibleStandardWindows(_ pid: pid_t) -> [AXUIElement] {
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    return ws.filter { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+                       && (attr($0, kAXMinimizedAttribute) as Bool?) != true }
+}
+
+/// アプリの操作中の窓（なければ一番前の普通の窓）
+func mainWindow(_ pid: pid_t) -> AXUIElement? {
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    if let w: AXUIElement = attr(ax, kAXFocusedWindowAttribute),
+       (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole { return w }
+    return visibleStandardWindows(pid).first
+}
+
+var finderApp: NSRunningApplication? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+}
+
+/// Finder の窓を少なくとも n 枚用意する（足りなければ ⌘N で開く）
+func ensureFinderWindows(_ n: Int, _ done: @escaping ([AXUIElement]) -> Void) {
+    guard let finder = finderApp else { done([]); return }
+    let pid = finder.processIdentifier
+    var ws = visibleStandardWindows(pid)
+    guard ws.count < n else { done(ws); return }
+    // ⌘N を Finder に直接送る
+    let src = CGEventSource(stateID: .hidSystemState)
+    for down in [true, false] {
+        let e = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)   // N
+        e?.flags = .maskCommand
+        e?.postToPid(pid)
+    }
+    var tries = 0
+    func wait() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let now = visibleStandardWindows(pid)
+            tries += 1
+            if now.count > ws.count {
+                ws = now
+                ensureFinderWindows(n, done)                 // まだ足りなければもう 1 枚
+            } else if tries < 15 { wait() }
+            else { done(now) }
+        }
+    }
+    wait()
+}
+
+/// 左右に並べて、両方を前に出す（左の窓を操作中にする）
+func sideBySide(_ left: AXUIElement, _ right: AXUIElement) {
+    guard let cur = currentFrame(left) else { return }
+    let screen = visibleAXFrame(containing: CGPoint(x: cur.midX, y: cur.midY))
+    place(left, .left, toggle: false, screen: screen)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        place(right, .right, toggle: false, screen: screen)
+    }
+    var lp: pid_t = 0, rp: pid_t = 0
+    AXUIElementGetPid(left, &lp); AXUIElementGetPid(right, &rp)
+    AXUIElementPerformAction(right, kAXRaiseAction as CFString)
+    if lp != rp { NSRunningApplication(processIdentifier: rp)?.activate() }
+    AXUIElementPerformAction(left, kAXRaiseAction as CFString)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        NSRunningApplication(processIdentifier: lp)?.activate()
+    }
+}
+
+/// アプリの窓を左、Finder を右に
+func arrangeWithFinder(_ w: AXUIElement) {
+    var pid: pid_t = 0
+    AXUIElementGetPid(w, &pid)
+    if pid == finderApp?.processIdentifier { arrangeFinders(); return }
+    ensureFinderWindows(1) { fs in
+        if let f = fs.first { sideBySide(w, f) }
+    }
+}
+
+/// Finder を 2 枚、左右に
+func arrangeFinders() {
+    ensureFinderWindows(2) { fs in
+        if fs.count >= 2 { sideBySide(fs[0], fs[1]) }
+    }
+}
+
 // MARK: - すべての窓を Dock にしまう
 
 /// RedGreen がしまった窓（「戻す」で元に戻す）
@@ -605,7 +725,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         started = true
         log(L("log.start"))
         idle = IdleWatcher()
-        let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue)
+        Switcher.shared.applySystemHotKeys()
+        FinderBar.shared.start()
+        let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                 eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil)
         if let t = tap {
@@ -627,8 +749,25 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let q = m.addItem(withTitle: L("menu.quitLast"), action: #selector(toggleQuit), keyEquivalent: "")
         q.target = self; q.state = Prefs.quitLast ? .on : .off
         m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
+        let sw = m.addItem(withTitle: L("menu.switcher"), action: #selector(toggleSwitcher), keyEquivalent: "")
+        sw.target = self; sw.state = Switcher.enabled ? .on : .off
+        let fb = m.addItem(withTitle: L("menu.finderBar"), action: #selector(toggleFinderBar), keyEquivalent: "")
+        fb.target = self; fb.state = FinderBar.enabled ? .on : .off
         m.addItem(.separator())
 
+        // Finder と並べる（メニューを開いたときの前面のアプリが対象）
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != getpid(),
+           front.bundleIdentifier != "com.apple.finder", front.activationPolicy == .regular {
+            let it = m.addItem(withTitle: L("menu.finder.withApp", front.localizedName ?? "?"),
+                               action: #selector(MenuAction.run), keyEquivalent: "")
+            let pid = front.processIdentifier
+            let act = MenuAction { if let w = mainWindow(pid) { arrangeWithFinder(w) } }
+            finderActions = [act]
+            it.target = act
+            it.isEnabled = mainWindow(pid) != nil
+        }
+        m.addItem(withTitle: L("menu.finder.two"), action: #selector(twoFinders), keyEquivalent: "").target = self
+        m.addItem(.separator())
         m.addItem(withTitle: L("menu.minimizeAll"), action: #selector(minimizeAll), keyEquivalent: "").target = self
         let stillMin = minimizedByUs.filter { (attr($0, kAXMinimizedAttribute) as Bool?) == true }
         if !stillMin.isEmpty {
@@ -718,6 +857,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func quitAll() {
         for a in quittableApps() { log(L("log.quitAll", a.localizedName ?? "?", "\(a.terminate())")) }
     }
+    var finderActions: [MenuAction] = []
+    @objc func twoFinders() { arrangeFinders() }
     @objc func minimizeAll() { minimizeAllWindows() }
     @objc func restoreAll() { restoreMinimizedWindows() }
     @objc func openLangFolder() { NSWorkspace.shared.open(Lang.userDir) }
@@ -727,6 +868,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open([keepFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
                                 configuration: NSWorkspace.OpenConfiguration())
     }
+    @objc func toggleSwitcher() { Switcher.enabled.toggle() }
+    @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
+    func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
     @objc func toggleQuit() { Prefs.quitLast.toggle() }
     @objc func editExclude() {
@@ -755,6 +899,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
+var signalSources: [DispatchSourceSignal] = []
+
 @main
 struct Main {
     static func main() {
@@ -762,6 +908,14 @@ struct Main {
         let d = App()
         app.delegate = d
         app.setActivationPolicy(.accessory)
+        // pkill などで止められても、標準の ⌘Tab を必ず戻す
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { Switcher.shared.restoreSystemHotKeys(); exit(0) }
+            src.resume()
+            signalSources.append(src)
+        }
         app.run()
     }
 }
