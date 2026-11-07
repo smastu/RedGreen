@@ -40,6 +40,15 @@ enum Prefs {
     }
 }
 
+/// 動作の記録（~/Library/Logs/RedGreen.log）
+func log(_ m: String) {
+    let f = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/RedGreen.log")
+    let df = DateFormatter(); df.dateFormat = "MM-dd HH:mm:ss"
+    let line = "\(df.string(from: Date())) \(m)\n"
+    if let h = try? FileHandle(forWritingTo: f) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+    else { try? line.write(to: f, atomically: true, encoding: .utf8) }
+}
+
 // MARK: - アクセシビリティの小道具
 
 func attr<T>(_ e: AXUIElement, _ name: String) -> T? {
@@ -99,21 +108,74 @@ let systemWide = AXUIElementCreateSystemWide()
 var swallowUp = false
 var tap: CFMachPort?
 
-/// マウスのクリックを見張り、緑ボタンなら横取りして「画面いっぱい」にする
+/// アプリの普通の窓（最小化中も含む）の数
+func standardWindowCount(_ pid: pid_t) -> Int {
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    return ws.filter { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole }.count
+}
+
+var pendingQuit = Set<pid_t>()
+
+/// 窓を閉じる操作のあと、そのアプリの窓が 0 になっていたら終了（保存の確認などで遅れることがあるので数回確かめる）
+func checkQuit(pid: pid_t, before: Int, why: String) {
+    guard Prefs.quitLast, before > 0, pid != getpid(), !pendingQuit.contains(pid),
+          let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular else { return }
+    let ex = Prefs.excluded()
+    if ex.contains((app.bundleIdentifier ?? "").lowercased()) || ex.contains((app.localizedName ?? "").lowercased()) { return }
+    pendingQuit.insert(pid)
+    var tries = [0.7, 2.0, 5.0]
+    func step() {
+        guard !tries.isEmpty else { pendingQuit.remove(pid); return }
+        let d = tries.removeFirst()
+        DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+            guard !app.isTerminated else { pendingQuit.remove(pid); return }
+            let n = standardWindowCount(pid)
+            if n == 0 {
+                log("\(why)：\(app.localizedName ?? "?") の窓が 0 → 終了 \(app.terminate())")
+                pendingQuit.remove(pid)
+            } else { step() }
+        }
+    }
+    step()
+}
+
+/// クリックとキーを見張る：緑ボタンは横取りして「画面いっぱい」、赤ボタンと ⌘W は閉じたあとの窓の数を確かめる
 let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
     if type == .leftMouseUp && swallowUp { swallowUp = false; return nil }
-    guard type == .leftMouseDown, Prefs.green, !event.flags.contains(.maskAlternate) else {
+    if type == .keyDown {
+        let f = event.flags
+        if f.contains(.maskCommand), !f.contains(.maskControl), !f.contains(.maskAlternate),
+           event.getIntegerValueField(.keyboardEventKeycode) == 13,                // W
+           let front = NSWorkspace.shared.frontmostApplication {
+            let pid = front.processIdentifier
+            let before = Prefs.quitLast ? standardWindowCount(pid) : 0
+            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: "⌘W") }
+        }
         return Unmanaged.passUnretained(event)
     }
+    guard type == .leftMouseDown else { return Unmanaged.passUnretained(event) }
     let loc = event.location
     var el: AXUIElement?
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el,
           (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
-          let sub: String = attr(e, kAXSubroleAttribute),
+          let sub: String = attr(e, kAXSubroleAttribute) else {
+        return Unmanaged.passUnretained(event)
+    }
+    if sub == kAXCloseButtonSubrole {
+        var pid: pid_t = 0
+        if Prefs.quitLast, AXUIElementGetPid(e, &pid) == .success {
+            let before = standardWindowCount(pid)
+            DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: "赤ボタン") }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+    guard Prefs.green, !event.flags.contains(.maskAlternate),
           sub == kAXFullScreenButtonSubrole || sub == kAXZoomButtonSubrole,
           let win: AXUIElement = attr(e, kAXWindowAttribute) else {
         return Unmanaged.passUnretained(event)
@@ -123,65 +185,10 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     return nil
 }
 
-// MARK: - 最後の窓を閉じたら終了
-
-final class AppWatch {
-    let app: NSRunningApplication
-    let ax: AXUIElement
-    var observer: AXObserver?
-    var hadWindow = false
-    init(_ a: NSRunningApplication) { app = a; ax = AXUIElementCreateApplication(a.processIdentifier) }
-
-    func standardWindows() -> [AXUIElement] {
-        let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
-        return ws.filter { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole }
-    }
-
-    func watch(window w: AXUIElement) {
-        guard let o = observer else { return }
-        AXObserverAddNotification(o, w, kAXUIElementDestroyedNotification as CFString,
-                                  Unmanaged.passUnretained(self).toOpaque())
-        if (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole { hadWindow = true }
-    }
-
-    func start() {
-        var o: AXObserver?
-        guard AXObserverCreate(app.processIdentifier, axCallback, &o) == .success, let o = o else { return }
-        observer = o
-        AXObserverAddNotification(o, ax, kAXWindowCreatedNotification as CFString, Unmanaged.passUnretained(self).toOpaque())
-        let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
-        ws.forEach { watch(window: $0) }
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
-    }
-
-    func stop() {
-        if let o = observer { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
-        observer = nil
-    }
-
-    /// 窓が閉じた：少し待って、普通の窓が 1 つも残っていなければ終了
-    func windowClosed() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
-            guard Prefs.quitLast, hadWindow, !app.isTerminated, standardWindows().isEmpty else { return }
-            let ex = Prefs.excluded()
-            if ex.contains((app.bundleIdentifier ?? "").lowercased()) || ex.contains((app.localizedName ?? "").lowercased()) { return }
-            app.terminate()
-        }
-    }
-}
-
-let axCallback: AXObserverCallback = { _, element, note, refcon in
-    guard let refcon = refcon else { return }
-    let w = Unmanaged<AppWatch>.fromOpaque(refcon).takeUnretainedValue()
-    if (note as String) == kAXWindowCreatedNotification { w.watch(window: element) }
-    else if (note as String) == kAXUIElementDestroyedNotification { w.windowClosed() }
-}
-
 // MARK: - 本体
 
 final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var status: NSStatusItem!
-    var watches: [pid_t: AppWatch] = [:]
     var started = false
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -193,6 +200,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // アクセシビリティの許可を待ってから始める（許可されるまで 2 秒ごとに確認）
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        log("起動 許可=\(AXIsProcessTrusted())")
         if AXIsProcessTrustedWithOptions(opts) { startAll() }
         else {
             Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] t in
@@ -204,32 +212,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func startAll() {
         guard !started else { return }
         started = true
-        let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
+        log("開始（許可あり）")
+        let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                 eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil)
         if let t = tap {
             CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, t, 0), .commonModes)
             CGEvent.tapEnable(tap: t, enable: true)
         }
-        NSWorkspace.shared.runningApplications.forEach { add($0) }
-        let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-                // 起動直後は窓がまだないので少し待つ
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.add(a) }
-            }
-        }
-        nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-                self?.watches.removeValue(forKey: a.processIdentifier)?.stop()
-            }
-        }
-    }
-
-    func add(_ a: NSRunningApplication) {
-        guard a.activationPolicy == .regular, a.processIdentifier != getpid(),
-              watches[a.processIdentifier] == nil, !a.isTerminated else { return }
-        let w = AppWatch(a); w.start(); watches[a.processIdentifier] = w
+        AXUIElementSetMessagingTimeout(systemWide, 0.3)
     }
 
     // メニュー
