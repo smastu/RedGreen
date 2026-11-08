@@ -256,7 +256,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
         if let ed = field.currentEditor() as? NSTextView, ed.hasMarkedText() { return }   // 日本語の変換中は待つ
         let list = PathCompleter.candidates(for: t)
         // 打った名前とぴったり同じ 1 件だけなら、一覧は出さない
-        if list.count == 1, PathCompleter.norm(list[0].path) == PathCompleter.norm((t as NSString).expandingTildeInPath) {
+        if list.count == 1, !t.hasSuffix("/"), PathCompleter.norm(list[0].path) == PathCompleter.norm((t as NSString).expandingTildeInPath) {
             completer.hide(); return
         }
         completer.show(list, above: panel.frame, parent: panel)
@@ -277,8 +277,8 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
         } else {
             let common = String.commonPrefix(list.map(\.name))
             let expanded = (t as NSString).expandingTildeInPath
-            let dir = expanded.hasSuffix("/") ? expanded : (expanded as NSString).deletingLastPathComponent
-            let typed = expanded.hasSuffix("/") ? "" : (expanded as NSString).lastPathComponent
+            let dir = t.hasSuffix("/") ? expanded : (expanded as NSString).deletingLastPathComponent
+            let typed = t.hasSuffix("/") ? "" : (expanded as NSString).lastPathComponent
             if common.count > typed.count {
                 setText(keepTilde((dir as NSString).appendingPathComponent(common)))
             } else {

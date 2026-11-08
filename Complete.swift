@@ -64,9 +64,10 @@ final class PathCompleter: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     /// 入力中の文字列から候補を作る。返すのは候補の一覧
     static func candidates(for text: String, limit: Int = 200) -> [(name: String, path: String, isDir: Bool)] {
         guard !text.isEmpty else { return [] }
+        // expandingTildeInPath は末尾の / を落とすので、/ で終わるかは元の文字列で見る
         let expanded = (text as NSString).expandingTildeInPath
         let dir: String, prefix: String
-        if expanded.hasSuffix("/") {
+        if text.hasSuffix("/") {
             dir = expanded; prefix = ""
         } else {
             dir = (expanded as NSString).deletingLastPathComponent
