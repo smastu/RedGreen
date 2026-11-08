@@ -467,7 +467,9 @@ var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
 
 func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     if Date().timeIntervalSince(r.time) > 0.45 { showCloseMenu(r.button, pid: r.pid); return }
-    let before = Prefs.quitLast ? standardWindowCount(r.pid) : 0
+    let sub = isSubWindow(attr(r.button, kAXWindowAttribute) as AXUIElement?)
+    let before = Prefs.quitLast && !sub ? standardWindowCount(r.pid) : 0
+    if sub { log("赤ボタン：サブウィンドウなのでアプリは終了しない（\(NSRunningApplication(processIdentifier: r.pid)?.localizedName ?? "?")）") }
     AXUIElementPerformAction(r.button, kAXPressAction as CFString)
     if Prefs.quitLast { checkQuit(pid: r.pid, before: before, why: L("why.red")) }
 }
@@ -608,6 +610,20 @@ func standardWindowCount(_ pid: pid_t) -> Int {
 
 var pendingQuit = Set<pid_t>()
 
+/// 設定・環境設定などのサブウィンドウか。閉じても「最後の窓」とみなさない（アプリを終了しない）
+/// 目印：SwiftUI の Settings 窓の識別子、題名、黄色ボタンがない・押せない（設定窓はふつう最小化できない）
+func isSubWindow(_ w: AXUIElement?) -> Bool {
+    guard let w else { return false }
+    if (attr(w, kAXSubroleAttribute) as String?) != kAXStandardWindowSubrole { return true }
+    let id = ((attr(w, kAXIdentifierAttribute) as String?) ?? "").lowercased()
+    if id.contains("settings") || id.contains("preferences") { return true }
+    let t = ((attr(w, kAXTitleAttribute) as String?) ?? "").lowercased()
+    for k in ["設定", "環境設定", "settings", "preferences", "options", "オプション", "について", "about "] where t.contains(k) { return true }
+    guard let mb: AXUIElement = attr(w, kAXMinimizeButtonAttribute) else { return true }
+    if (attr(mb, kAXEnabledAttribute) as Bool?) == false { return true }
+    return false
+}
+
 /// 窓を閉じる操作のあと、そのアプリの窓が 0 になっていたら終了（保存の確認などで遅れることがあるので数回確かめる）
 func checkQuit(pid: pid_t, before: Int, why: String) {
     guard Prefs.quitLast, before > 0, pid != getpid(), !pendingQuit.contains(pid),
@@ -665,6 +681,9 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
            event.getIntegerValueField(.keyboardEventKeycode) == 13,                // W
            let front = NSWorkspace.shared.frontmostApplication {
             let pid = front.processIdentifier
+            let ax = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(ax, 0.3)
+            if isSubWindow(attr(ax, kAXFocusedWindowAttribute) as AXUIElement?) { return Unmanaged.passUnretained(event) }
             let before = Prefs.quitLast ? standardWindowCount(pid) : 0
             DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.cmdW")) }
         }
@@ -694,7 +713,8 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     }
     if sub == kAXCloseButtonSubrole {
         var pid: pid_t = 0
-        if Prefs.quitLast, AXUIElementGetPid(e, &pid) == .success {
+        if Prefs.quitLast, AXUIElementGetPid(e, &pid) == .success,
+           !isSubWindow(attr(e, kAXWindowAttribute) as AXUIElement?) {
             let before = standardWindowCount(pid)
             DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.red")) }
         }
