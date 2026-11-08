@@ -2,6 +2,7 @@
 //  ⌘ を押したまま Tab で次、⇧Tab・矢印で前後、離すと切り替え、Esc で取り消し、クリックでも選べる
 //  すぐ離せば一覧は出さずに直前の窓へ
 import AppKit
+import Carbon
 import ApplicationServices
 
 // macOS 標準の ⌘Tab を止める／戻す（非公開 API。AltTab なども使っている）
@@ -110,9 +111,25 @@ final class Switcher {
 
     /// 標準の ⌘Tab / ⇧⌘Tab を、この機能がオンで許可があるときだけ止める
     func applySystemHotKeys() {
-        let off = Switcher.enabled && AXIsProcessTrusted()
+        // セキュア入力（パスワード欄・リモートデスクトップなど）の間はキーが見えないので、標準の ⌘Tab に任せる
+        let off = Switcher.enabled && AXIsProcessTrusted() && !IsSecureEventInputEnabled()
         _ = CGSSetSymbolicHotKeyEnabled(1, !off)   // ⌘Tab
         _ = CGSSetSymbolicHotKeyEnabled(2, !off)   // ⇧⌘Tab
+    }
+
+    /// セキュア入力の入り切りを 1 秒ごとに見て、変わったときだけ標準の ⌘Tab を戻す／止める
+    private var secureTimer: Timer?
+    private var lastSecure = false
+    func watchSecureInput() {
+        secureTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let on = IsSecureEventInputEnabled()
+            guard on != self.lastSecure else { return }
+            self.lastSecure = on
+            if on, self.active { self.cancel() }
+            log(on ? L("log.secureOn") : L("log.secureOff"))
+            self.applySystemHotKeys()
+        }
     }
 
     func restoreSystemHotKeys() {

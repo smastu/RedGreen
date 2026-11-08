@@ -123,6 +123,8 @@ enum Lang {
         "menu.lang.export": "Export translation template…",
         "why.red": "Red button",
         "why.cmdW": "⌘W",
+        "log.secureOn": "Secure input is on (password field, remote desktop, etc.): using the standard ⌘Tab for now",
+        "log.secureOff": "Secure input is off: ⌘Tab switches windows again",
         "log.launch": "Launched (permission=%@)",
         "log.start": "Started (permission granted)",
         "log.quitLast": "%@: %@ has no windows → quit %@",
@@ -200,6 +202,8 @@ enum Lang {
         "menu.lang.export": "翻訳用のひな形を書き出す…",
         "why.red": "赤ボタン",
         "why.cmdW": "⌘W",
+        "log.secureOn": "セキュア入力がオン（パスワード欄・リモートデスクトップなど）：その間は標準の ⌘Tab に戻す",
+        "log.secureOff": "セキュア入力がオフ：⌘Tab の窓切り替えに戻した",
         "log.launch": "起動 許可=%@",
         "log.start": "開始（許可あり）",
         "log.quitLast": "%@：%@ の窓が 0 → 終了 %@",
@@ -1044,6 +1048,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log(L("log.start"))
         idle = IdleWatcher()
         Switcher.shared.applySystemHotKeys()
+        Switcher.shared.watchSecureInput()
         FinderBar.shared.start()
         buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
