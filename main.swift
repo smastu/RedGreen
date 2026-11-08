@@ -99,6 +99,7 @@ enum Lang {
         "menu.red": "Long-press Red Button: Close Window or Quit App",
         "menu.close.window": "Close This Window Only",
         "menu.close.app": "Quit %@",
+        "menu.hide.app": "Hide %@",
         "menu.min.window": "Minimize This Window",
         "menu.min.app": "Minimize All %@ Windows",
         "menu.min.all": "Minimize All Apps' Windows",
@@ -175,6 +176,7 @@ enum Lang {
         "menu.red": "赤ボタンの長押しで「窓だけ閉じる／アプリを終了」を選ぶ",
         "menu.close.window": "この窓だけ閉じる",
         "menu.close.app": "%@ を終了",
+        "menu.hide.app": "%@ を隠す",
         "menu.min.window": "この窓を Dock にしまう",
         "menu.min.app": "%@ の窓をすべて Dock にしまう",
         "menu.min.all": "すべてのアプリの窓を Dock にしまう",
@@ -486,7 +488,15 @@ func yellowReleased(_ y: (win: AXUIElement, time: Date)) {
     if Date().timeIntervalSince(y.time) > 0.45 { showMinimizeMenu(y.win); return }
     var pid: pid_t = 0
     AXUIElementGetPid(y.win, &pid)
-    if let app = NSRunningApplication(processIdentifier: pid), app.hide() { return }
+    let app = NSRunningApplication(processIdentifier: pid)
+    let name = app?.localizedName ?? "?"
+    if app?.hide() == true { log("黄色ボタン：隠した（\(name)）"); return }
+    // 前面でないアプリなどで hide() が通らないことがあるので、アクセシビリティで隠す
+    let ax = AXUIElementCreateApplication(pid)
+    if AXUIElementSetAttributeValue(ax, kAXHiddenAttribute as CFString, kCFBooleanTrue) == .success {
+        log("黄色ボタン：AX で隠した（\(name)）"); return
+    }
+    log("黄色ボタン：隠せないので Dock にしまう（\(name)）")
     AXUIElementSetAttributeValue(y.win, kAXMinimizedAttribute as CFString, kCFBooleanTrue)   // 隠せないアプリだけ従来どおり
 }
 
@@ -496,6 +506,11 @@ func showMinimizeMenu(_ w: AXUIElement) {
     AXUIElementGetPid(w, &pid)
     let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
     let m = NSMenu()
+    addItem(m, L("menu.hide.app", name)) {
+        if NSRunningApplication(processIdentifier: pid)?.hide() != true {
+            AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXHiddenAttribute as CFString, kCFBooleanTrue)
+        }
+    }
     addItem(m, L("menu.min.window")) { AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue) }
     addItem(m, L("menu.min.app", name)) { minimizeAllWindows(only: pid) }
     addItem(m, L("menu.min.all")) { minimizeAllWindows() }
