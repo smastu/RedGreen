@@ -86,6 +86,11 @@ enum Lang {
         "menu.finder.two": "Two Finder Windows Side by Side",
         "menu.switcher": "⌘Tab Switches Windows (like Windows Alt+Tab)",
         "menu.finderBar": "Editable Address Bar in Finder",
+        "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
+        "menu.yellow": "Long-press Yellow Button: Minimize Menu",
+        "menu.min.window": "Minimize This Window",
+        "menu.min.app": "Minimize All %@ Windows",
+        "menu.min.all": "Minimize All Apps' Windows",
         "switch.minimized": "(minimized)",
         "switch.hidden": "(hidden)",
         "switch.noWindow": "(no windows)",
@@ -140,6 +145,11 @@ enum Lang {
         "menu.finder.two": "Finder を 2 つ横に並べる",
         "menu.switcher": "⌘Tab で窓ごとに切り替える（Windows の Alt+Tab 風）",
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
+        "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
+        "menu.yellow": "黄色ボタンの長押しでしまい方を選ぶ",
+        "menu.min.window": "この窓を Dock にしまう",
+        "menu.min.app": "%@ の窓をすべて Dock にしまう",
+        "menu.min.all": "すべてのアプリの窓を Dock にしまう",
         "switch.minimized": "（最小化）",
         "switch.hidden": "（非表示）",
         "switch.noWindow": "（窓なし）",
@@ -272,6 +282,10 @@ enum Prefs {
         get { UserDefaults.standard.object(forKey: "quitLast") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "quitLast") }
     }
+    static var yellow: Bool {
+        get { UserDefaults.standard.object(forKey: "yellow") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "yellow") }
+    }
     static func excluded() -> Set<String> {
         if !FileManager.default.fileExists(atPath: excludeFile.path) {
             try? defaultExclude.write(to: excludeFile, atomically: true, encoding: .utf8)
@@ -400,6 +414,30 @@ func greenReleased(_ g: (win: AXUIElement, loc: CGPoint, time: Date), at up: CGP
     place(g.win, .fill)
 }
 
+/// 黄色ボタン：クリックはふつうに最小化、長押しでしまい方のメニュー
+var yellowDown: (win: AXUIElement, time: Date)?
+
+func yellowReleased(_ y: (win: AXUIElement, time: Date)) {
+    if Date().timeIntervalSince(y.time) > 0.45 { showMinimizeMenu(y.win); return }
+    AXUIElementSetAttributeValue(y.win, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+}
+
+func showMinimizeMenu(_ w: AXUIElement) {
+    menuActions.removeAll()
+    var pid: pid_t = 0
+    AXUIElementGetPid(w, &pid)
+    let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+    let m = NSMenu()
+    addItem(m, L("menu.min.window")) { AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue) }
+    addItem(m, L("menu.min.app", name)) { minimizeAllWindows(only: pid) }
+    addItem(m, L("menu.min.all")) { minimizeAllWindows() }
+    if !minimizedByUs.isEmpty {
+        m.addItem(.separator())
+        addItem(m, L("menu.restoreAll", "\(minimizedByUs.count)")) { restoreMinimizedWindows() }
+    }
+    m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+}
+
 /// 長押しで出す配置メニュー
 final class MenuAction: NSObject {
     let f: () -> Void
@@ -479,8 +517,14 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     }
     if (type == .keyDown || type == .flagsChanged) && Switcher.shared.handle(type, event) { return nil }
     if type == .flagsChanged { return Unmanaged.passUnretained(event) }
+    if type == .keyDown && CutPaste.shared.handle(event) { return nil }
     if type == .leftMouseUp && swallowUp {
         swallowUp = false
+        if let y = yellowDown {
+            yellowDown = nil
+            DispatchQueue.main.async { yellowReleased(y) }
+            return nil
+        }
         if let g = greenDown {
             greenDown = nil
             let up = event.location
@@ -514,6 +558,13 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
             DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.red")) }
         }
         return Unmanaged.passUnretained(event)
+    }
+    if sub == kAXMinimizeButtonSubrole {
+        guard Prefs.yellow, !event.flags.contains(.maskAlternate),
+              let win: AXUIElement = attr(e, kAXWindowAttribute) else { return Unmanaged.passUnretained(event) }
+        swallowUp = true
+        yellowDown = (win, Date())
+        return nil
     }
     guard Prefs.green, !event.flags.contains(.maskAlternate),
           sub == kAXFullScreenButtonSubrole || sub == kAXZoomButtonSubrole,
@@ -663,9 +714,11 @@ func arrangeFinders() {
 /// RedGreen がしまった窓（「戻す」で元に戻す）
 var minimizedByUs: [AXUIElement] = []
 
-func minimizeAllWindows() {
+/// only を渡すとそのアプリの窓だけ
+func minimizeAllWindows(only: pid_t? = nil) {
     var done: [AXUIElement] = []
-    for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid() {
+    for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid()
+                                                         && (only == nil || app.processIdentifier == only) {
         let ax = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(ax, 0.5)
         let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
@@ -676,7 +729,7 @@ func minimizeAllWindows() {
             }
         }
     }
-    minimizedByUs = done
+    minimizedByUs = only == nil ? done : minimizedByUs + done
     log(L("log.minimizeAll", "\(done.count)"))
 }
 
@@ -746,11 +799,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let g = m.addItem(withTitle: L("menu.green"), action: #selector(toggleGreen), keyEquivalent: "")
         g.target = self; g.state = Prefs.green ? .on : .off
+        let y = m.addItem(withTitle: L("menu.yellow"), action: #selector(toggleYellow), keyEquivalent: "")
+        y.target = self; y.state = Prefs.yellow ? .on : .off
         let q = m.addItem(withTitle: L("menu.quitLast"), action: #selector(toggleQuit), keyEquivalent: "")
         q.target = self; q.state = Prefs.quitLast ? .on : .off
         m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
         let sw = m.addItem(withTitle: L("menu.switcher"), action: #selector(toggleSwitcher), keyEquivalent: "")
         sw.target = self; sw.state = Switcher.enabled ? .on : .off
+        let cx = m.addItem(withTitle: L("menu.cutPaste"), action: #selector(toggleCut), keyEquivalent: "")
+        cx.target = self; cx.state = CutPaste.enabled ? .on : .off
         let fb = m.addItem(withTitle: L("menu.finderBar"), action: #selector(toggleFinderBar), keyEquivalent: "")
         fb.target = self; fb.state = FinderBar.enabled ? .on : .off
         m.addItem(.separator())
@@ -869,6 +926,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
     @objc func toggleSwitcher() { Switcher.enabled.toggle() }
+    @objc func toggleYellow() { Prefs.yellow.toggle() }
+    @objc func toggleCut() { CutPaste.enabled.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
