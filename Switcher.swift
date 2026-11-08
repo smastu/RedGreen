@@ -79,8 +79,10 @@ final class Switcher {
         }
         switch key {
         case 48: move(flags.contains(.maskShift) ? -1 : 1)     // Tab
-        case 123, 126: move(-1)                                 // ← ↑
-        case 124, 125: move(1)                                  // → ↓
+        case 126: move(-1)                                      // ↑
+        case 125: move(1)                                       // ↓
+        case 123: move(-view.columnStep)                        // ←（2 列なら隣の列へ）
+        case 124: move(view.columnStep)                         // →
         case 53: cancel()                                       // Esc
         case 36, 76: DispatchQueue.main.async { self.confirm() } // Return
         default: break
@@ -102,6 +104,11 @@ final class Switcher {
 
     private func move(_ d: Int) {
         guard !items.isEmpty else { return }
+        if abs(d) > 1 {   // 列の移動は端で止める（一周させない）
+            index = max(0, min(items.count - 1, index + d))
+            if panel.isVisible { view.update(items: items, selected: index) }
+            return
+        }
         index = (index + d + items.count) % items.count
         if panel.isVisible { view.update(items: items, selected: index) }
     }
@@ -129,13 +136,18 @@ final class Switcher {
     }
 
     private func show() {
-        view.update(items: items, selected: index)
-        let size = view.fittingSize
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
-        panel.setFrame(NSRect(x: f.midX - size.width / 2, y: f.midY - size.height / 2 + f.height * 0.1,
-                              width: size.width, height: size.height), display: true)
+        // 高さは画面の 70% まで（上下 15% は空ける）。幅は画面の 90% まで
+        view.limit = NSSize(width: f.width * 0.9, height: f.height * 0.7)
+        view.update(items: items, selected: index)
+        let size = view.fittingSize
+        // 少ないときは少し上寄せ。多いときも上下 15% の余白は守る
+        var y = f.midY - size.height / 2 + f.height * 0.1
+        y = min(y, f.maxY - f.height * 0.15 - size.height)
+        y = max(y, f.minY + f.height * 0.15)
+        panel.setFrame(NSRect(x: f.midX - size.width / 2, y: y, width: size.width, height: size.height), display: true)
         panel.orderFrontRegardless()
     }
 
@@ -177,25 +189,46 @@ final class SwitchView: NSView {
     private var selected = 0
     private var first = 0
     private let rowH: CGFloat = 34
-    private let maxRows = 14
-    private let width: CGFloat = 560
+    private let colW: CGFloat = 560
+    private let gap: CGFloat = 8
     private let pad: CGFloat = 10
+    /// 使ってよい大きさ（画面に合わせて Switcher が決める）
+    var limit = NSSize(width: 1200, height: 34 * 14 + 20)
+
+    /// 1 列に入る行数（画面の高さから）
+    private var maxRows: Int { max(3, Int((limit.height - pad * 2) / rowH)) }
+    /// 列の数：1 列に入りきらなければ 2 列
+    private var cols: Int { items.count > maxRows ? 2 : 1 }
+    /// 実際の行数：2 列なら半分ずつ（入りきらなければ maxRows）
+    private var rows: Int { cols == 1 ? max(1, items.count) : min(maxRows, (items.count + 1) / 2) }
+    private var capacity: Int { rows * cols }
+    private var columnWidth: CGFloat { min(colW, (limit.width - pad * 2 - gap * CGFloat(cols - 1)) / CGFloat(cols)) }
+    private var width: CGFloat { pad * 2 + columnWidth * CGFloat(cols) + gap * CGFloat(cols - 1) }
+    /// ←→ で動く量（2 列なら 1 列分）
+    var columnStep: Int { cols == 2 ? rows : 1 }
+
+    /// i 番目（表示の中での位置）の四角
+    private func cellRect(_ k: Int) -> NSRect {
+        let c = k / rows, r = k % rows
+        return NSRect(x: pad + CGFloat(c) * (columnWidth + gap), y: pad + CGFloat(r) * rowH, width: columnWidth, height: rowH)
+    }
 
     override var isFlipped: Bool { true }
 
     func update(items: [SwitchItem], selected: Int) {
         self.items = items
         self.selected = selected
-        let rows = min(items.count, maxRows)
-        if selected < first { first = selected }
-        if selected >= first + rows { first = selected - rows + 1 }
-        first = max(0, min(first, items.count - rows))
+        // 入りきらないときは、選んでいる位置が見えるように列単位でずらす
+        if selected < first { first = (selected / rows) * rows }
+        if selected >= first + capacity { first = (selected / rows - cols + 1) * rows }
+        first = max(0, min(first, max(0, items.count - capacity)))
+        if cols == 2 { first = (first / rows) * rows }
         setFrameSize(fittingSize)
         needsDisplay = true
     }
 
     override var fittingSize: NSSize {
-        NSSize(width: width, height: CGFloat(min(items.count, maxRows)) * rowH + pad * 2)
+        NSSize(width: width, height: CGFloat(rows) * rowH + pad * 2)
     }
 
     override func draw(_ dirty: NSRect) {
@@ -205,11 +238,11 @@ final class SwitchView: NSView {
         NSColor.separatorColor.setStroke()
         bg.stroke()
 
-        let rows = min(items.count, maxRows)
-        for r in 0..<rows {
-            let i = first + r
+        for k in 0..<capacity {
+            let i = first + k
+            guard i < items.count else { break }
             let it = items[i]
-            let rect = NSRect(x: pad, y: pad + CGFloat(r) * rowH, width: width - pad * 2, height: rowH)
+            let rect = cellRect(k)
             if i == selected {
                 NSColor.controlAccentColor.withAlphaComponent(0.85).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
@@ -231,7 +264,7 @@ final class SwitchView: NSView {
                 .font: NSFont.systemFont(ofSize: 11),
                 .foregroundColor: sel ? NSColor.white.withAlphaComponent(0.85) : NSColor.secondaryLabelColor,
             ]
-            let appW: CGFloat = it.window == nil ? 0 : 130
+            let appW: CGFloat = it.window == nil ? 0 : min(130, rect.width * 0.3)
             let titleRect = NSRect(x: rect.minX + 42, y: rect.minY + 8, width: rect.width - 50 - appW, height: 18)
             (title as NSString).draw(with: titleRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: main)
             if it.window != nil {
@@ -245,7 +278,9 @@ final class SwitchView: NSView {
 
     override func mouseDown(with e: NSEvent) {
         let p = convert(e.locationInWindow, from: nil)
-        let r = Int((p.y - pad) / rowH)
-        if r >= 0, r < min(items.count, maxRows) { onPick?(first + r) }
+        for k in 0..<capacity where cellRect(k).contains(p) {
+            if first + k < items.count { onPick?(first + k) }
+            return
+        }
     }
 }
