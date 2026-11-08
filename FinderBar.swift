@@ -115,7 +115,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     private func frontChanged(isFinder: Bool) {
         if isFinder && FinderBar.enabled {
             if timer == nil {
-                timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+                timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in autoreleasepool { self?.tick() } }
                 tick()
             }
         } else {
@@ -161,7 +161,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     }
 
     /// AppleScript は専用の裏スレッドで動かす（Finder の返事待ちや許可の確認で、キー操作を止めないため）
-    private let scriptQueue = DispatchQueue(label: "RedGreen.FinderBar.script")
+    private let scriptQueue = DispatchQueue(label: "RedGreen.FinderBar.script", autoreleaseFrequency: .workItem)   // 1 回ごとに AppleScript の一時データを片づける
     private var fetching = false
 
     private lazy var getScript = NSAppleScript(source: """

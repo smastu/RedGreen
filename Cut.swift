@@ -88,7 +88,7 @@ final class CutPaste {
         set { UserDefaults.standard.set(newValue, forKey: "confirmDelete") }
     }
 
-    private let scriptQueue = DispatchQueue(label: "RedGreen.CutPaste.script")
+    private let scriptQueue = DispatchQueue(label: "RedGreen.CutPaste.script", autoreleaseFrequency: .workItem)   // 1 回ごとに AppleScript の一時データを片づける
     private lazy var selectionScript = NSAppleScript(source: """
         tell application "Finder"
             set out to {}

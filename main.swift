@@ -532,7 +532,7 @@ final class ButtonHover {
     private var shownAt: CGPoint?          // メニューを出したボタンの位置（離れるまで出し直さない）
 
     init() {
-        Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.tick() }
+        Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in autoreleasepool { self?.tick() } }
     }
 
     private func tick() {
@@ -648,7 +648,12 @@ func checkQuit(pid: pid_t, before: Int, why: String) {
 }
 
 /// クリックとキーを見張る：緑ボタンは横取りして「画面いっぱい」、赤ボタンと ⌘W は閉じたあとの窓の数を確かめる
-let tapCallback: CGEventTapCallBack = { _, type, event, _ in
+/// メニューバー常駐のアプリは自分宛てのイベントをほとんど受け取らないので、AppKit の一時データの片づけ（autorelease）が
+/// なかなか走らず、クリックやキーのたびに溜まっていく。入口ごとにその場で片づける
+let tapCallback: CGEventTapCallBack = { proxy, type, event, refcon in
+    autoreleasepool { tapBody(proxy, type, event, refcon) }
+}
+let tapBody: CGEventTapCallBack = { _, type, event, _ in
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
@@ -757,7 +762,7 @@ final class IdleWatcher {
                 self?.inactive[a.processIdentifier] = nil
             }
         }
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.tick() }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in autoreleasepool { self?.tick() } }
     }
 
     func tick() {
