@@ -49,6 +49,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     private var lastTitle = ""
     private var editing = false
     private let height: CGFloat = 26
+    private let completer = PathCompleter()
 
     private override init() {
         panel = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: 400, height: 26),
@@ -98,6 +99,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
             field.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
         ])
+        completer.onPick = { [weak self] s in self?.setText(s); self?.updateCompletion() }
     }
 
     /// 軽さ重視：Finder が前面のときだけ 0.25 秒ごとに窓を追い、それ以外は止める
@@ -206,13 +208,84 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-        if sel == #selector(NSResponder.insertNewline(_:)) { commit(); return true }
-        if sel == #selector(NSResponder.cancelOperation(_:)) { finishEditing(); return true }
-        return false
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)):
+            completer.hide(); commit(); return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            if completer.isShown { completer.hide() } else { finishEditing() }   // 1 回目は一覧だけ閉じる
+            return true
+        case #selector(NSResponder.insertTab(_:)):
+            complete(); return true
+        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveUp(_:)):
+            if !completer.isShown { updateCompletion() }
+            if let s = completer.move(sel == #selector(NSResponder.moveDown(_:)) ? 1 : -1) { setText(keepTilde(s)) }
+            return true
+        default:
+            return false
+        }
     }
 
+    func controlTextDidChange(_ obj: Notification) { updateCompletion() }
+
     func controlTextDidEndEditing(_ obj: Notification) {
+        completer.hide()
         if editing { editing = false; lastTitle = "" }      // 編集をやめたら表示を戻す
+    }
+
+    // MARK: 補完
+
+    private var editorText: String { (field.currentEditor() as? NSTextView)?.string ?? field.stringValue }
+
+    /// 欄の文字を置きかえて、カーソルを末尾へ
+    private func setText(_ s: String) {
+        if let ed = field.currentEditor() as? NSTextView {
+            ed.string = s
+            ed.setSelectedRange(NSRange(location: (s as NSString).length, length: 0))
+        } else {
+            field.stringValue = s
+        }
+    }
+
+    /// ~ で打ち始めたら、補完後も ~ のまま見せる
+    private func keepTilde(_ s: String) -> String {
+        editorText.hasPrefix("~") ? (s as NSString).abbreviatingWithTildeInPath + (s.hasSuffix("/") && s.count > 1 ? "/" : "") : s
+    }
+
+    private func updateCompletion() {
+        let t = editorText
+        if let ed = field.currentEditor() as? NSTextView, ed.hasMarkedText() { return }   // 日本語の変換中は待つ
+        let list = PathCompleter.candidates(for: t)
+        // 打った名前とぴったり同じ 1 件だけなら、一覧は出さない
+        if list.count == 1, PathCompleter.norm(list[0].path) == PathCompleter.norm((t as NSString).expandingTildeInPath) {
+            completer.hide(); return
+        }
+        completer.show(list, above: panel.frame, parent: panel)
+    }
+
+    /// Tab：候補が 1 つならそれに、複数なら共通する部分まで補う
+    private func complete() {
+        if completer.isShown, completer.selected >= 0 {          // ↑↓で選んだものを確定して、中へ進む
+            setText(keepTilde(completer.display(completer.selected)))
+            updateCompletion()
+            return
+        }
+        let t = editorText
+        let list = PathCompleter.candidates(for: t)
+        guard !list.isEmpty else { NSSound.beep(); return }
+        if list.count == 1 {
+            setText(keepTilde(list[0].isDir ? list[0].path + "/" : list[0].path))
+        } else {
+            let common = String.commonPrefix(list.map(\.name))
+            let expanded = (t as NSString).expandingTildeInPath
+            let dir = expanded.hasSuffix("/") ? expanded : (expanded as NSString).deletingLastPathComponent
+            let typed = expanded.hasSuffix("/") ? "" : (expanded as NSString).lastPathComponent
+            if common.count > typed.count {
+                setText(keepTilde((dir as NSString).appendingPathComponent(common)))
+            } else {
+                NSSound.beep()
+            }
+        }
+        updateCompletion()
     }
 
     private func commit() {
@@ -239,6 +312,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
 
     /// 編集を終えて、キーボードを Finder の窓に返す
     private func finishEditing() {
+        completer.hide()
         editing = false
         lastTitle = ""
         panel.makeFirstResponder(nil)
