@@ -103,6 +103,12 @@ enum Lang {
         "menu.min.app": "Minimize All %@ Windows",
         "menu.min.all": "Minimize All Apps' Windows",
         "switch.minimized": "(minimized)",
+        "switch.hint": "⌘ held: W close · M minimize · Q quit app · H hide app · F full screen · S search · ⌘` this app only",
+        "switch.hintSearch": "Type to filter (English letters) · ↑↓ select · Return switch · Esc clear / close",
+        "switch.searchPlaceholder": "Type part of a window title or app name",
+        "switch.noMatch": "No matching windows",
+        "menu.switcherExclude": "Apps Not Shown in ⌘Tab…",
+        "file.switcherExclude.header": "# Apps not shown in the ⌘Tab list (one per line: app name or bundle ID). Lines starting with # are ignored",
         "switch.hidden": "(hidden)",
         "switch.noWindow": "(no windows)",
         "finderBar.placeholder": "Type a path and press Return",
@@ -173,6 +179,12 @@ enum Lang {
         "menu.min.app": "%@ の窓をすべて Dock にしまう",
         "menu.min.all": "すべてのアプリの窓を Dock にしまう",
         "switch.minimized": "（最小化）",
+        "switch.hint": "⌘ を押したまま：W 閉じる・M しまう・Q 終了・H 隠す・F 全画面・S 検索・⌘` 同じアプリだけ",
+        "switch.hintSearch": "英字で絞り込み・↑↓ 選ぶ・Return 切り替え・Esc 消す／閉じる",
+        "switch.searchPlaceholder": "窓の題名かアプリ名の一部を打つ（英字）",
+        "switch.noMatch": "見つかりません",
+        "menu.switcherExclude": "⌘Tab に出さないアプリ…",
+        "file.switcherExclude.header": "# ⌘Tab の一覧に出さないアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視",
         "switch.hidden": "（非表示）",
         "switch.noWindow": "（窓なし）",
         "finderBar.placeholder": "パスを入力して Return",
@@ -1019,6 +1031,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
         let sw = m.addItem(withTitle: L("menu.switcher"), action: #selector(toggleSwitcher), keyEquivalent: "")
         sw.target = self; sw.state = Switcher.enabled ? .on : .off
+        let se = m.addItem(withTitle: L("menu.switcherExclude"), action: #selector(editSwitcherExclude), keyEquivalent: "")
+        se.target = self; se.indentationLevel = 1
         let dk = m.addItem(withTitle: L("menu.dockMin"), action: #selector(toggleDockMin), keyEquivalent: "")
         dk.target = self; dk.state = Prefs.dockMin ? .on : .off
         let wk = m.addItem(withTitle: L("menu.finderWinKeys"), action: #selector(toggleWinKeys), keyEquivalent: "")
@@ -1157,6 +1171,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
     @objc func toggleQuit() { Prefs.quitLast.toggle() }
+    @objc func editSwitcherExclude() {
+        _ = Switcher.excluded()
+        NSWorkspace.shared.open([switcherExcludeFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
     @objc func editExclude() {
         _ = Prefs.excluded()
         NSWorkspace.shared.open([excludeFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
