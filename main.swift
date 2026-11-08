@@ -646,7 +646,7 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)
     }
-    if Prefs.dockMin, !event.flags.contains(.maskAlternate), let pid = dockClickOnFrontApp(e), dockToggle(pid) {
+    if Prefs.dockMin, !event.flags.contains(.maskAlternate), let app = dockClickedApp(e), dockToggle(app) {
         swallowUp = true
         return nil
     }
@@ -822,15 +822,48 @@ func arrangeFinders() {
 
 // MARK: - Dock のアイコンで最小化（Windows のタスクバー風）
 
-/// 押したのが「前面のアプリ」の Dock アイコンなら、その pid
-func dockClickOnFrontApp(_ e: AXUIElement) -> pid_t? {
-    guard (attr(e, kAXSubroleAttribute) as String?) == "AXApplicationDockItem",
-          let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != getpid() else { return nil }
+/// 押したのが Dock のアプリのアイコンなら、そのアプリ（動いているものだけ）
+func dockClickedApp(_ e: AXUIElement) -> NSRunningApplication? {
+    guard (attr(e, kAXSubroleAttribute) as String?) == "AXApplicationDockItem" else { return nil }
     var v: CFTypeRef?
     guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
-          let url = (v as? URL) ?? (v as? NSURL as URL?),
-          url.standardizedFileURL.path == front.bundleURL?.standardizedFileURL.path else { return nil }
-    return front.processIdentifier
+          let url = (v as? URL) ?? (v as? NSURL as URL?) else { return nil }
+    let path = url.standardizedFileURL.path
+    return NSWorkspace.shared.runningApplications.first {
+        $0.processIdentifier != getpid() && $0.bundleURL?.standardizedFileURL.path == path
+    }
+}
+
+/// しまってある窓を戻す（RedGreen 以外でしまったもの：⌘M・黄色ボタンなど）。戻せたら true
+/// 「アプリのアイコンにしまう」設定だと、しまった窓は窓の一覧から消えるので、「ウインドウ」メニューの ◆ の項目も押す
+func restoreMinimized(_ pid: pid_t) -> Bool {
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    var done = false
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    for w in ws where (attr(w, kAXMinimizedAttribute) as Bool?) == true {
+        AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        done = true
+    }
+    if done { return true }
+    guard let bar: AXUIElement = attr(ax, kAXMenuBarAttribute) else { return false }
+    for top in (attr(bar, kAXChildrenAttribute) as [AXUIElement]?) ?? [] {
+        for menu in (attr(top, kAXChildrenAttribute) as [AXUIElement]?) ?? [] {
+            let items: [AXUIElement] = attr(menu, kAXChildrenAttribute) ?? []
+            // 「しまう」（⌘M）がある menu が「ウインドウ」メニュー
+            guard items.contains(where: { (attr($0, kAXMenuItemCmdCharAttribute) as String?) == "M"
+                                          && ((attr($0, kAXMenuItemCmdModifiersAttribute) as Int?) ?? 0) == 0 }) else { continue }
+            for it in items {
+                let mark: String = attr(it, kAXMenuItemMarkCharAttribute) ?? ""
+                if mark == "◆" || mark == "◇" {
+                    AXUIElementPerformAction(it, kAXPressAction as CFString)
+                    done = true
+                }
+            }
+            return done
+        }
+    }
+    return false
 }
 
 /// RedGreen が Dock のクリックでしまった窓（もう一度押したら戻す）
@@ -847,9 +880,13 @@ func hasVisibleWindow(_ pid: pid_t) -> Bool {
     }
 }
 
-/// Dock のアイコンを押したとき：窓が出ていればしまう、RedGreen がしまった窓だけなら戻す。どちらでもなければ Dock に任せる
-func dockToggle(_ pid: pid_t) -> Bool {
+/// Dock のアイコンを押したとき：
+/// 前面のアプリで窓が出ていればしまう。窓が出ていなければ、しまってある窓を戻して前に出す。どちらでもなければ Dock に任せる
+func dockToggle(_ app: NSRunningApplication) -> Bool {
+    let pid = app.processIdentifier
+    let isFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     if hasVisibleWindow(pid) {
+        guard isFront else { return false }                 // 後ろのアプリは Dock に任せて前に出す
         DispatchQueue.main.async {
             let before = minimizedByUs
             minimizeAllWindows(only: pid)
@@ -857,7 +894,18 @@ func dockToggle(_ pid: pid_t) -> Bool {
         }
         return true
     }
-    guard let ws = dockMinimized.removeValue(forKey: pid), !ws.isEmpty else { return false }
+    guard let ws = dockMinimized.removeValue(forKey: pid), !ws.isEmpty else {
+        // メニューをたどるのは時間がかかることがあるので、クリックの受け取りの中ではやらない
+        DispatchQueue.main.async {
+            if restoreMinimized(pid) {
+                app.activate()
+            } else if let url = app.bundleURL {
+                // 戻す窓がなければ、Dock と同じく開き直す（窓を出し直すアプリなら新しい窓が出る）
+                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+            }
+        }
+        return true
+    }
     DispatchQueue.main.async {
         for w in ws.reversed() {
             AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
