@@ -89,29 +89,16 @@ final class CutPaste {
     }
 
     private let scriptQueue = DispatchQueue(label: "RedGreen.CutPaste.script", autoreleaseFrequency: .workItem)   // 1 回ごとに AppleScript の一時データを片づける
-    private lazy var selectionScript = NSAppleScript(source: """
-        tell application "Finder"
-            set out to {}
-            repeat with i in (get selection)
-                set end of out to name of i
-            end repeat
-            return out
-        end tell
-        """)
+
 
     /// 選んでいる項目の名前を Finder に聞いて、確認してからゴミ箱へ
     private func confirmTrash(_ pid: pid_t) {
         guard CutPaste.confirmDelete else { _ = pressMenu(pid, vkey: 51, mods: 0); return }
-        let script = selectionScript
         scriptQueue.async {
-            var err: NSDictionary?
-            let r = script?.executeAndReturnError(&err)
-            var names: [String] = []
-            if let r, r.numberOfItems > 0 {
-                for i in 1...r.numberOfItems { if let n = r.atIndex(i)?.stringValue { names.append(n) } }
-            }
+            let r = FinderAE.selectionNames()
+            let names = (try? r.get()) ?? []
             DispatchQueue.main.async {
-                if err != nil { _ = self.pressMenu(pid, vkey: 51, mods: 0); return }   // 聞けなければ確認なし（⌘⌫ と同じ）
+                if case .failure = r { _ = self.pressMenu(pid, vkey: 51, mods: 0); return }   // 聞けなければ確認なし（⌘⌫ と同じ）
                 guard !names.isEmpty else { return }
                 let alert = NSAlert()
                 alert.messageText = names.count == 1 ? L("trash.one", names[0]) : L("trash.many", "\(names.count)")

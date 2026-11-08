@@ -4,7 +4,7 @@ set -e
 cd "${0:a:h}"
 APP="$HOME/Applications/RedGreen.app"
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
+swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift FinderAE.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
 cp build/RedGreen "$APP/Contents/MacOS/.RedGreen.new"
 mv -f "$APP/Contents/MacOS/.RedGreen.new" "$APP/Contents/MacOS/RedGreen"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"

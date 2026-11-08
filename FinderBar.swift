@@ -164,38 +164,32 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     private let scriptQueue = DispatchQueue(label: "RedGreen.FinderBar.script", autoreleaseFrequency: .workItem)   // 1 回ごとに AppleScript の一時データを片づける
     private var fetching = false
 
-    private lazy var getScript = NSAppleScript(source: """
-        tell application "Finder"
-            if (count of Finder windows) = 0 then return ""
-            try
-                return POSIX path of (target of Finder window 1 as alias)
-            on error
-                return ""
-            end try
-        end tell
-        """)
+
 
     private func refreshPath() {
+        // 題名がフルパスなら（Finder の「パスを題名に表示」）、それをそのまま使う。Finder に聞かずに済む
+        var isDir: ObjCBool = false
+        if lastTitle.hasPrefix("/"), FileManager.default.fileExists(atPath: lastTitle, isDirectory: &isDir), isDir.boolValue {
+            field.placeholderString = L("finderBar.placeholder")
+            field.stringValue = lastTitle
+            return
+        }
         guard !fetching else { lastTitle = ""; return }       // 実行中なら次の tick でもう一度
         fetching = true
-        let script = getScript
         scriptQueue.async { [weak self] in
-            var err: NSDictionary?
-            let r = script?.executeAndReturnError(&err)
-            let code = err?[NSAppleScript.errorNumber] as? Int
-            var p = r?.stringValue ?? ""
-            if p.count > 1 && p.hasSuffix("/") { p.removeLast() }
+            let r = FinderAE.frontTarget()
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.fetching = false
                 guard !self.editing else { return }
-                if let code {
+                switch r {
+                case .failure(let e):
                     self.field.stringValue = ""
-                    self.field.placeholderString = (code == -1743) ? L("finderBar.needPermission") : self.lastTitle
-                    return
+                    self.field.placeholderString = (e.code == -1743) ? L("finderBar.needPermission") : self.lastTitle
+                case .success(let p):
+                    self.field.placeholderString = L("finderBar.placeholder")
+                    self.field.stringValue = (p?.isEmpty ?? true) ? self.lastTitle : p!   // 「最近の項目」など、場所のない窓は名前だけ
                 }
-                self.field.placeholderString = L("finderBar.placeholder")
-                self.field.stringValue = p.isEmpty ? self.lastTitle : p   // 「最近の項目」など、場所のない窓は名前だけ
             }
         }
     }
@@ -297,12 +291,8 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
             return
         }
         if isDir.boolValue {
-            let esc = p.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             scriptQueue.async {
-                var err: NSDictionary?
-                NSAppleScript(source: "tell application \"Finder\" to set target of Finder window 1 to (POSIX file \"\(esc)\" as alias)")?
-                    .executeAndReturnError(&err)
-                if err != nil { DispatchQueue.main.async { NSSound.beep() } }
+                if !FinderAE.setFrontTarget(p) { DispatchQueue.main.async { NSSound.beep() } }
             }
         } else {
             NSWorkspace.shared.open(URL(fileURLWithPath: p))
