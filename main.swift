@@ -88,6 +88,10 @@ enum Lang {
         "menu.finderBar": "Editable Address Bar in Finder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
         "menu.yellow": "Long-press Yellow Button: Minimize Menu",
+        "menu.yellowHover": "Also Show These Menus When Hovering",
+        "menu.red": "Long-press Red Button: Close Window or Quit App",
+        "menu.close.window": "Close This Window Only",
+        "menu.close.app": "Quit %@",
         "menu.min.window": "Minimize This Window",
         "menu.min.app": "Minimize All %@ Windows",
         "menu.min.all": "Minimize All Apps' Windows",
@@ -147,6 +151,10 @@ enum Lang {
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
         "menu.yellow": "黄色ボタンの長押しでしまい方を選ぶ",
+        "menu.yellowHover": "黄・赤ボタンにマウスを乗せたときもメニューを出す",
+        "menu.red": "赤ボタンの長押しで「窓だけ閉じる／アプリを終了」を選ぶ",
+        "menu.close.window": "この窓だけ閉じる",
+        "menu.close.app": "%@ を終了",
         "menu.min.window": "この窓を Dock にしまう",
         "menu.min.app": "%@ の窓をすべて Dock にしまう",
         "menu.min.all": "すべてのアプリの窓を Dock にしまう",
@@ -286,6 +294,14 @@ enum Prefs {
         get { UserDefaults.standard.object(forKey: "yellow") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "yellow") }
     }
+    static var yellowHover: Bool {
+        get { UserDefaults.standard.object(forKey: "yellowHover") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "yellowHover") }
+    }
+    static var red: Bool {
+        get { UserDefaults.standard.object(forKey: "red") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "red") }
+    }
     static func excluded() -> Set<String> {
         if !FileManager.default.fileExists(atPath: excludeFile.path) {
             try? defaultExclude.write(to: excludeFile, atomically: true, encoding: .utf8)
@@ -414,6 +430,25 @@ func greenReleased(_ g: (win: AXUIElement, loc: CGPoint, time: Date), at up: CGP
     place(g.win, .fill)
 }
 
+/// 赤ボタン：すぐ離せば今までどおり（閉じて、最後の窓ならアプリも終了）。長押しで「窓だけ閉じる／アプリを終了」
+var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
+
+func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
+    if Date().timeIntervalSince(r.time) > 0.45 { showCloseMenu(r.button, pid: r.pid); return }
+    let before = Prefs.quitLast ? standardWindowCount(r.pid) : 0
+    AXUIElementPerformAction(r.button, kAXPressAction as CFString)
+    if Prefs.quitLast { checkQuit(pid: r.pid, before: before, why: L("why.red")) }
+}
+
+func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
+    menuActions.removeAll()
+    let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+    let m = NSMenu()
+    addItem(m, L("menu.close.window")) { AXUIElementPerformAction(button, kAXPressAction as CFString) }
+    addItem(m, L("menu.close.app", name)) { NSRunningApplication(processIdentifier: pid)?.terminate() }
+    m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+}
+
 /// 黄色ボタン：クリックはふつうに最小化、長押しでしまい方のメニュー
 var yellowDown: (win: AXUIElement, time: Date)?
 
@@ -437,6 +472,45 @@ func showMinimizeMenu(_ w: AXUIElement) {
     }
     m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
 }
+
+/// 黄色・赤ボタンにマウスを乗せて止めたら、メニューを出す（macOS の緑ボタンと同じ）
+/// 軽さ重視：マウスの位置を 0.15 秒ごとに見るだけ。0.5 秒止まったときだけ、そこが黄色・赤ボタンかを 1 回調べる
+final class ButtonHover {
+    private var lastPos = CGPoint.zero
+    private var restSince = Date()
+    private var checked = false
+    private var shownAt: CGPoint?          // メニューを出したボタンの位置（離れるまで出し直さない）
+
+    init() {
+        Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    private func tick() {
+        guard Prefs.yellowHover, Prefs.yellow || Prefs.red else { return }
+        let m = NSEvent.mouseLocation
+        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let p = CGPoint(x: m.x, y: primaryH - m.y)          // AX の座標（左上原点）
+        if hypot(p.x - lastPos.x, p.y - lastPos.y) > 2 {
+            lastPos = p; restSince = Date(); checked = false
+            if let s = shownAt, hypot(p.x - s.x, p.y - s.y) > 12 { shownAt = nil }
+            return
+        }
+        guard !checked, shownAt == nil, Date().timeIntervalSince(restSince) > 0.5,
+              NSEvent.pressedMouseButtons == 0 else { return }
+        checked = true
+        var el: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success, let e = el,
+              let sub: String = attr(e, kAXSubroleAttribute),
+              (sub == kAXMinimizeButtonSubrole && Prefs.yellow) || (sub == kAXCloseButtonSubrole && Prefs.red),
+              let win: AXUIElement = attr(e, kAXWindowAttribute) else { return }
+        var pid: pid_t = 0
+        AXUIElementGetPid(e, &pid)
+        if pid == getpid() { return }
+        shownAt = p
+        if sub == kAXMinimizeButtonSubrole { showMinimizeMenu(win) } else { showCloseMenu(e, pid: pid) }
+    }
+}
+var buttonHover: ButtonHover?
 
 /// 長押しで出す配置メニュー
 final class MenuAction: NSObject {
@@ -520,6 +594,11 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     if type == .keyDown && CutPaste.shared.handle(event) { return nil }
     if type == .leftMouseUp && swallowUp {
         swallowUp = false
+        if let r = redDown {
+            redDown = nil
+            DispatchQueue.main.async { redReleased(r) }
+            return nil
+        }
         if let y = yellowDown {
             yellowDown = nil
             DispatchQueue.main.async { yellowReleased(y) }
@@ -550,6 +629,14 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
           (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
           let sub: String = attr(e, kAXSubroleAttribute) else {
         return Unmanaged.passUnretained(event)
+    }
+    if sub == kAXCloseButtonSubrole, Prefs.red, !event.flags.contains(.maskAlternate) {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(e, &pid) == .success, pid != getpid() {
+            swallowUp = true
+            redDown = (e, pid, Date())
+            return nil
+        }
     }
     if sub == kAXCloseButtonSubrole {
         var pid: pid_t = 0
@@ -780,6 +867,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         idle = IdleWatcher()
         Switcher.shared.applySystemHotKeys()
         FinderBar.shared.start()
+        buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                 eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil)
@@ -801,6 +889,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         g.target = self; g.state = Prefs.green ? .on : .off
         let y = m.addItem(withTitle: L("menu.yellow"), action: #selector(toggleYellow), keyEquivalent: "")
         y.target = self; y.state = Prefs.yellow ? .on : .off
+        let rd = m.addItem(withTitle: L("menu.red"), action: #selector(toggleRed), keyEquivalent: "")
+        rd.target = self; rd.state = Prefs.red ? .on : .off
+        let yh = m.addItem(withTitle: L("menu.yellowHover"), action: #selector(toggleYellowHover), keyEquivalent: "")
+        yh.target = self; yh.state = Prefs.yellowHover ? .on : .off; yh.indentationLevel = 1
         let q = m.addItem(withTitle: L("menu.quitLast"), action: #selector(toggleQuit), keyEquivalent: "")
         q.target = self; q.state = Prefs.quitLast ? .on : .off
         m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
@@ -927,6 +1019,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func toggleSwitcher() { Switcher.enabled.toggle() }
     @objc func toggleYellow() { Prefs.yellow.toggle() }
+    @objc func toggleYellowHover() { Prefs.yellowHover.toggle() }
+    @objc func toggleRed() { Prefs.red.toggle() }
     @objc func toggleCut() { CutPaste.enabled.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
