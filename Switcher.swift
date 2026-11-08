@@ -11,6 +11,42 @@ func CGSSetSymbolicHotKeyEnabled(_ hotKey: Int32, _ enabled: Bool) -> Int32
 @_silgen_name("_AXUIElementGetWindow")
 func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
 
+// MARK: - 窓 1 枚だけを前に出す（macOS の非公開の命令。AltTab と同じ方法）
+// アプリごと前面にすると、そのアプリの窓が全部前に出てしまうため
+
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ el: AXUIElement, _ wid: inout CGWindowID) -> AXError
+
+@_silgen_name("_SLPSSetFrontProcessWithOptions")
+func _SLPSSetFrontProcessWithOptions(_ psn: inout ProcessSerialNumber, _ wid: CGWindowID, _ mode: UInt32) -> CGError
+
+@_silgen_name("SLPSPostEventRecordTo")
+func SLPSPostEventRecordTo(_ psn: inout ProcessSerialNumber, _ bytes: inout UInt8) -> CGError
+
+@_silgen_name("GetProcessForPID")
+func GetProcessForPID(_ pid: pid_t, _ psn: inout ProcessSerialNumber) -> OSStatus
+
+/// 選んだ窓だけを最前面に（ほかの窓・ほかのアプリの重なり順は変えない）。できなければ false
+func focusOnlyWindow(_ w: AXUIElement, pid: pid_t) -> Bool {
+    var wid: CGWindowID = 0
+    guard _AXUIElementGetWindow(w, &wid) == .success, wid != 0 else { return false }
+    var psn = ProcessSerialNumber()
+    guard GetProcessForPID(pid, &psn) == noErr else { return false }
+    guard _SLPSSetFrontProcessWithOptions(&psn, wid, 0x200) == .success else { return false }   // 0x200 = 利用者の操作として
+    // その窓をキーウインドウにする合図（AltTab の makeKeyWindow と同じ中身）
+    var bytes = [UInt8](repeating: 0, count: 0xf8)
+    bytes[0x04] = 0xf8
+    bytes[0x3a] = 0x10
+    withUnsafeBytes(of: wid) { for (i, b) in $0.enumerated() { bytes[0x3c + i] = b } }
+    for i in 0x20..<0x30 { bytes[i] = 0xff }
+    bytes[0x08] = 0x01
+    _ = SLPSPostEventRecordTo(&psn, &bytes[0])
+    bytes[0x08] = 0x02
+    _ = SLPSPostEventRecordTo(&psn, &bytes[0])
+    AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+    return true
+}
+
 struct SwitchItem {
     let app: NSRunningApplication
     let window: AXUIElement?
@@ -38,6 +74,7 @@ final class Switcher {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 100),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         panel.level = .popUpMenu
+        panel.acceptsMouseMovedEvents = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -127,9 +164,11 @@ final class Switcher {
         if it.app.isHidden { it.app.unhide() }
         if let w = it.window {
             if it.minimized { AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse) }
+            if focusOnlyWindow(w, pid: it.app.processIdentifier) { return }
             AXUIElementPerformAction(w, kAXRaiseAction as CFString)
             AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
         }
+        // 窓のないアプリ、または上の方法が使えないとき（アプリごと前面に）
         let ax = AXUIElementCreateApplication(it.app.processIdentifier)
         AXUIElementSetAttributeValue(ax, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
         it.app.activate()
@@ -215,7 +254,32 @@ final class SwitchView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// マウスを乗せている項目（薄く強調する）
+    private var hover: Int?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    private func index(at p: NSPoint) -> Int? {
+        for k in 0..<capacity where cellRect(k).contains(p) { return first + k < items.count ? first + k : nil }
+        return nil
+    }
+
+    override func mouseMoved(with e: NSEvent) {
+        let h = index(at: convert(e.locationInWindow, from: nil))
+        if h != hover { hover = h; needsDisplay = true }
+    }
+
+    override func mouseExited(with e: NSEvent) {
+        if hover != nil { hover = nil; needsDisplay = true }
+    }
+
     func update(items: [SwitchItem], selected: Int) {
+        if self.items.count != items.count { hover = nil }
         self.items = items
         self.selected = selected
         // 入りきらないときは、選んでいる位置が見えるように列単位でずらす
@@ -246,6 +310,13 @@ final class SwitchView: NSView {
             if i == selected {
                 NSColor.controlAccentColor.withAlphaComponent(0.85).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+            } else if i == hover {
+                NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+                NSColor.controlAccentColor.withAlphaComponent(0.7).setStroke()
+                let b = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+                b.lineWidth = 1
+                b.stroke()
             }
             if let icon = it.app.icon {
                 icon.draw(in: NSRect(x: rect.minX + 8, y: rect.minY + 5, width: 24, height: 24))
@@ -296,9 +367,6 @@ final class SwitchView: NSView {
 
     override func mouseDown(with e: NSEvent) {
         let p = convert(e.locationInWindow, from: nil)
-        for k in 0..<capacity where cellRect(k).contains(p) {
-            if first + k < items.count { onPick?(first + k) }
-            return
-        }
+        if let i = index(at: p) { onPick?(i) }
     }
 }
