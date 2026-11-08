@@ -19,6 +19,8 @@
   "menu.quit": "批量退出应用",
   "menu.quit.all": "全部退出（%@ 个）",
   "menu.quit.note": "排除：终端、通讯应用等（编辑…）",
+  "menu.dockMin": "点击前台应用的程序坞图标时最小化（类似 Windows 任务栏）",
+  "menu.finderWinKeys": "访达：Enter 打开、Delete 移到废纸篓、F2 重命名",
   "menu.cutPaste": "在访达中用 ⌘X → ⌘V 移动文件",
   "menu.yellowHover": "鼠标悬停在黄色/红色按钮上时也显示菜单",
   "menu.red": "长按红色按钮选择“仅关闭窗口/退出应用”",

@@ -87,6 +87,8 @@ enum Lang {
         "menu.switcher": "⌘Tab Switches Windows (like Windows Alt+Tab)",
         "menu.finderBar": "Editable Address Bar in Finder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
+        "menu.dockMin": "Click Front App's Dock Icon to Minimize (like Windows taskbar)",
+        "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
         "menu.yellow": "Long-press Yellow Button: Minimize Menu",
         "menu.yellowHover": "Also Show These Menus When Hovering",
         "menu.red": "Long-press Red Button: Close Window or Quit App",
@@ -150,6 +152,8 @@ enum Lang {
         "menu.switcher": "⌘Tab で窓ごとに切り替える（Windows の Alt+Tab 風）",
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
+        "menu.dockMin": "前面のアプリの Dock アイコンを押したら Dock にしまう（Windows のタスクバー風）",
+        "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
         "menu.yellow": "黄色ボタンの長押しでしまい方を選ぶ",
         "menu.yellowHover": "黄・赤ボタンにマウスを乗せたときもメニューを出す",
         "menu.red": "赤ボタンの長押しで「窓だけ閉じる／アプリを終了」を選ぶ",
@@ -297,6 +301,10 @@ enum Prefs {
     static var yellowHover: Bool {
         get { UserDefaults.standard.object(forKey: "yellowHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "yellowHover") }
+    }
+    static var dockMin: Bool {
+        get { UserDefaults.standard.object(forKey: "dockMin") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "dockMin") }
     }
     static var red: Bool {
         get { UserDefaults.standard.object(forKey: "red") as? Bool ?? true }
@@ -625,8 +633,15 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     guard type == .leftMouseDown else { return Unmanaged.passUnretained(event) }
     let loc = event.location
     var el: AXUIElement?
-    guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el,
-          (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
+    guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
+        return Unmanaged.passUnretained(event)
+    }
+    if Prefs.dockMin, let pid = dockClickOnFrontApp(e), !event.flags.contains(.maskAlternate) {
+        swallowUp = true
+        DispatchQueue.main.async { minimizeAllWindows(only: pid) }
+        return nil
+    }
+    guard (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
           let sub: String = attr(e, kAXSubroleAttribute) else {
         return Unmanaged.passUnretained(event)
     }
@@ -796,6 +811,24 @@ func arrangeFinders() {
     }
 }
 
+// MARK: - Dock のアイコンで最小化（Windows のタスクバー風）
+
+/// 押したのが「前面のアプリ」の Dock アイコンで、そのアプリに出ている窓があれば、その pid
+func dockClickOnFrontApp(_ e: AXUIElement) -> pid_t? {
+    guard (attr(e, kAXSubroleAttribute) as String?) == "AXApplicationDockItem",
+          let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != getpid() else { return nil }
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
+          let url = (v as? URL) ?? (v as? NSURL as URL?),
+          url.standardizedFileURL.path == front.bundleURL?.standardizedFileURL.path else { return nil }
+    let ax = AXUIElementCreateApplication(front.processIdentifier)
+    AXUIElementSetMessagingTimeout(ax, 0.3)
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    let open = ws.contains { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
+                             && (attr($0, kAXMinimizedAttribute) as Bool?) != true }
+    return open ? front.processIdentifier : nil
+}
+
 // MARK: - すべての窓を Dock にしまう
 
 /// RedGreen がしまった窓（「戻す」で元に戻す）
@@ -898,6 +931,10 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(withTitle: L("menu.editExclude"), action: #selector(editExclude), keyEquivalent: "").target = self
         let sw = m.addItem(withTitle: L("menu.switcher"), action: #selector(toggleSwitcher), keyEquivalent: "")
         sw.target = self; sw.state = Switcher.enabled ? .on : .off
+        let dk = m.addItem(withTitle: L("menu.dockMin"), action: #selector(toggleDockMin), keyEquivalent: "")
+        dk.target = self; dk.state = Prefs.dockMin ? .on : .off
+        let wk = m.addItem(withTitle: L("menu.finderWinKeys"), action: #selector(toggleWinKeys), keyEquivalent: "")
+        wk.target = self; wk.state = CutPaste.winKeys ? .on : .off
         let cx = m.addItem(withTitle: L("menu.cutPaste"), action: #selector(toggleCut), keyEquivalent: "")
         cx.target = self; cx.state = CutPaste.enabled ? .on : .off
         let fb = m.addItem(withTitle: L("menu.finderBar"), action: #selector(toggleFinderBar), keyEquivalent: "")
@@ -1022,6 +1059,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleYellowHover() { Prefs.yellowHover.toggle() }
     @objc func toggleRed() { Prefs.red.toggle() }
     @objc func toggleCut() { CutPaste.enabled.toggle() }
+    @objc func toggleDockMin() { Prefs.dockMin.toggle() }
+    @objc func toggleWinKeys() { CutPaste.winKeys.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }

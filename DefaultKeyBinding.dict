@@ -1,0 +1,11 @@
+{
+    /* Home / End を行の先頭・末尾へ（Windows 風）。⇧ で選択、⌃ で文書の先頭・末尾 */
+    "\UF729"   = moveToBeginningOfLine:;
+    "\UF72B"   = moveToEndOfLine:;
+    "$\UF729"  = moveToBeginningOfLineAndModifySelection:;
+    "$\UF72B"  = moveToEndOfLineAndModifySelection:;
+    "^\UF729"  = moveToBeginningOfDocument:;
+    "^\UF72B"  = moveToEndOfDocument:;
+    "^$\UF729" = moveToBeginningOfDocumentAndModifySelection:;
+    "^$\UF72B" = moveToEndOfDocumentAndModifySelection:;
+}

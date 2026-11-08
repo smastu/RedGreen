@@ -15,8 +15,19 @@ final class CutPaste {
     private var pending: Int?
     private let finderID = "com.apple.finder"
 
+    /// Finder で Windows のキー：Enter で開く、Delete でゴミ箱、F2 で名前の変更
+    static var winKeys: Bool {
+        get { UserDefaults.standard.object(forKey: "finderWinKeys") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "finderWinKeys") }
+    }
+
+    /// RedGreen が自分で送ったキーの目印（自分で拾い直さないため）
+    static let mark: Int64 = 0x5247
+
     /// tap から呼ぶ。true を返したら元のキーは捨てる
     func handle(_ e: CGEvent) -> Bool {
+        if e.getIntegerValueField(.eventSourceUserData) == CutPaste.mark { return false }
+        if CutPaste.winKeys, handleWinKeys(e) { return true }
         guard CutPaste.enabled else { return false }
         let f = e.flags
         guard f.contains(.maskCommand), !f.contains(.maskControl), !f.contains(.maskAlternate), !f.contains(.maskShift),
@@ -53,6 +64,43 @@ final class CutPaste {
         }
     }
 
+    private func handleWinKeys(_ e: CGEvent) -> Bool {
+        let f = e.flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+        guard f.isEmpty, !NSApp.isActive,
+              let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier == finderID else { return false }
+        let key = e.getIntegerValueField(.keyboardEventKeycode)
+        guard key == 36 || key == 76 || key == 51 || key == 120 else { return false }
+        let pid = front.processIdentifier
+        guard inFileList(pid) else { return false }        // 名前の変更中・検索欄・確認の画面などはそのまま
+        DispatchQueue.main.async {
+            switch key {
+            case 36, 76: _ = self.pressMenu(pid, char: "O", mods: 0)       // Enter → 開く（⌘O）
+            case 51: _ = self.pressMenu(pid, vkey: 51, mods: 0)            // Delete → ゴミ箱に入れる（⌘⌫）
+            default: self.postReturn()                                     // F2 → 名前の変更（Return）
+            }
+        }
+        return true
+    }
+
+    /// Finder のファイルの一覧（リスト・アイコン・カラム・ギャラリー表示、デスクトップ）にキーボードが向いているか
+    private func inFileList(_ pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.2)
+        guard let el: AXUIElement = axValue(app, kAXFocusedUIElementAttribute) else { return false }
+        let role: String = axValue(el, kAXRoleAttribute) ?? ""
+        return ["AXOutline", "AXList", "AXTable", "AXBrowser", "AXScrollArea", "AXGroup"].contains(role)
+    }
+
+    private func postReturn() {
+        let src = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            let ev = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: down)
+            ev?.flags = []
+            ev?.setIntegerValueField(.eventSourceUserData, value: CutPaste.mark)
+            ev?.post(tap: .cgSessionEventTap)
+        }
+    }
+
     /// Finder で文字を入力中か（名前の変更・検索欄・「フォルダへ移動」など）
     private func isTyping(_ pid: pid_t) -> Bool {
         let app = AXUIElementCreateApplication(pid)
@@ -67,14 +115,16 @@ final class CutPaste {
     }
 
     /// メニューバーから、ショートカットが char＋mods（AX の値：⌥=2、⇧=1、⌃=4）の項目を探して押す
-    private func pressMenu(_ pid: pid_t, char: String, mods: Int) -> Bool {
+    private func pressMenu(_ pid: pid_t, char: String? = nil, vkey: Int? = nil, mods: Int) -> Bool {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.5)
         guard let bar: AXUIElement = axValue(app, kAXMenuBarAttribute) else { return false }
         for top in axChildren(bar) {
             for menu in axChildren(top) {
                 for it in axChildren(menu) {
-                    guard (axValue(it, kAXMenuItemCmdCharAttribute) as String?) == char,
+                    let hit = char.map { (axValue(it, kAXMenuItemCmdCharAttribute) as String?) == $0 }
+                        ?? ((axValue(it, kAXMenuItemCmdVirtualKeyAttribute) as Int?) == vkey)
+                    guard hit,
                           (axValue(it, kAXMenuItemCmdModifiersAttribute) as Int?) ?? 0 == mods else { continue }
                     if (axValue(it, kAXEnabledAttribute) as Bool?) == false { return false }
                     return AXUIElementPerformAction(it, kAXPressAction as CFString) == .success
