@@ -266,7 +266,25 @@ final class SwitchView: NSView {
             ]
             let appW: CGFloat = it.window == nil ? 0 : min(130, rect.width * 0.3)
             let titleRect = NSRect(x: rect.minX + 42, y: rect.minY + 8, width: rect.width - 50 - appW, height: 18)
-            (title as NSString).draw(with: titleRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: main)
+            if it.app.bundleIdentifier == "com.apple.finder", it.title.hasPrefix("/") {
+                // Finder はフォルダ名を目立たせ、その後ろに親の場所を薄く（長ければ頭を省く）
+                let path = it.title
+                var name = (path as NSString).lastPathComponent
+                if it.minimized { name += " " + L("switch.minimized") } else if it.hidden { name += " " + L("switch.hidden") }
+                let parent = (((path as NSString).deletingLastPathComponent) as NSString).abbreviatingWithTildeInPath
+                let nameW = min((name as NSString).size(withAttributes: main).width + 2, titleRect.width)
+                (name as NSString).draw(with: NSRect(x: titleRect.minX, y: titleRect.minY, width: nameW, height: 18),
+                                        options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: main)
+                let restW = titleRect.width - nameW - 10
+                if restW > 40, path != "/" {
+                    let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingHead
+                    var a = sub; a[.paragraphStyle] = p
+                    (parent as NSString).draw(with: NSRect(x: titleRect.minX + nameW + 10, y: titleRect.minY + 2, width: restW, height: 16),
+                                              options: [.usesLineFragmentOrigin], attributes: a)
+                }
+            } else {
+                (title as NSString).draw(with: titleRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: main)
+            }
             if it.window != nil {
                 let p = NSMutableParagraphStyle(); p.alignment = .right; p.lineBreakMode = .byTruncatingTail
                 var a = sub; a[.paragraphStyle] = p
