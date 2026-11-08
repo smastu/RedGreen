@@ -90,29 +90,53 @@ final class Switcher {
     private var searching = false               // S で検索中（⌘ を離しても閉じない）
     private var query = ""
     private var onlyPid: pid_t?                 // ⌘` のときは前面のアプリの窓だけ
-    private let panel: NSPanel
-    private let view: SwitchView
+    private var panel: NSPanel?
+    private var teardownWork: DispatchWorkItem?
+    private var view = SwitchView()
 
-    private init() {
-        view = SwitchView()
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 100),
+    private init() {}
+
+    /// 一覧の窓は出すときに作り、閉じたら捨てる（描画用のメモリ 10MB 以上を持ち続けないため）
+    private func ensurePanel() -> NSPanel {
+        if let p = panel { return p }
+        let v = SwitchView()
+        let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 100),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
-        panel.level = .popUpMenu
-        panel.acceptsMouseMovedEvents = true
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.contentView = view
-        view.onPick = { [weak self] i in self?.index = i; self?.confirm() }
-        view.onAction = { [weak self] i, a in self?.index = i; self?.act(a) }
+        p.level = .popUpMenu
+        p.acceptsMouseMovedEvents = true
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.hidesOnDeactivate = false
+        p.isReleasedWhenClosed = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        p.contentView = v
+        v.onPick = { [weak self] i in self?.index = i; self?.confirm() }
+        v.onAction = { [weak self] i, a in self?.index = i; self?.act(a) }
+        panel = p; view = v
+        return p
+    }
+
+    private func hidePanel() {
+        panel?.orderOut(nil)
+        teardownWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, !self.active, let p = self.panel else { return }
+            p.contentView = nil
+            p.close()
+            self.panel = nil
+            self.view = SwitchView()
+            self.all = []; self.items = []
+            malloc_zone_pressure_relief(nil, 0)       // 空いた分を OS に返す
+        }
+        teardownWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: w)   // 続けて ⌘Tab したときは作り直さない
     }
 
     /// 標準の ⌘Tab / ⇧⌘Tab を、この機能がオンで許可があるときだけ止める
     func applySystemHotKeys() {
         // セキュア入力（パスワード欄・リモートデスクトップなど）の間はキーが見えないので、標準の ⌘Tab に任せる
-        let off = Switcher.enabled && AXIsProcessTrusted() && !IsSecureEventInputEnabled()
+        let off = Switcher.enabled && AXIsProcessTrusted() && (!IsSecureEventInputEnabled() || !hotKeyRefs.isEmpty)
         _ = CGSSetSymbolicHotKeyEnabled(1, !off)   // ⌘Tab
         _ = CGSSetSymbolicHotKeyEnabled(2, !off)   // ⇧⌘Tab
     }
@@ -127,9 +151,46 @@ final class Switcher {
             guard on != self.lastSecure else { return }
             self.lastSecure = on
             if on, self.active { self.cancel() }
-            log(on ? L("log.secureOn") : L("log.secureOff"))
+            if on { self.registerHotKeys() } else { self.unregisterHotKeys() }
+            log(on ? (self.hotKeyRefs.isEmpty ? L("log.secureOn") : L("log.secureOnHotKey")) : L("log.secureOff"))
             self.applySystemHotKeys()
         }
+    }
+
+    // MARK: セキュア入力の間はショートカットキーとして ⌘Tab を受け取る（キーはイベントタップに届かないが、⌘ を離したのは届く）
+    fileprivate var hotKeyRefs: [EventHotKeyRef] = []
+    private var hotKeyHandler: EventHandlerRef?
+
+    private func registerHotKeys() {
+        guard Switcher.enabled, hotKeyRefs.isEmpty else { return }
+        if hotKeyHandler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ in
+                var hk = EventHotKeyID()
+                GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &hk)
+                DispatchQueue.main.async { Switcher.shared.hotKeyPressed(hk.id) }
+                return noErr
+            }, 1, &spec, nil, &hotKeyHandler)
+        }
+        let sig = OSType(0x52_47_53_57)   // 'RGSW'
+        for (id, mods) in [(UInt32(1), cmdKey), (UInt32(2), cmdKey | shiftKey), (UInt32(3), cmdKey), (UInt32(4), cmdKey | shiftKey)] {
+            var ref: EventHotKeyRef?
+            let key = id <= 2 ? UInt32(kVK_Tab) : UInt32(kVK_ANSI_Grave)
+            if RegisterEventHotKey(key, UInt32(mods), EventHotKeyID(signature: sig, id: id), GetApplicationEventTarget(), 0, &ref) == noErr,
+               let ref { hotKeyRefs.append(ref) }
+        }
+    }
+
+    private func unregisterHotKeys() {
+        hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+        hotKeyRefs.removeAll()
+    }
+
+    /// 1: ⌘Tab 2: ⇧⌘Tab 3: ⌘` 4: ⇧⌘`
+    fileprivate func hotKeyPressed(_ id: UInt32) {
+        let back = id == 2 || id == 4
+        if active { move(back ? -1 : 1) } else { begin(backward: back, sameApp: id >= 3) }
     }
 
     func restoreSystemHotKeys() {
@@ -220,7 +281,7 @@ final class Switcher {
     private func refilter() {
         items = filtered()
         index = 0
-        if panel.isVisible || searching { show() }
+        if panel?.isVisible == true || searching { show() }
     }
 
     private func move(_ d: Int) {
@@ -230,7 +291,7 @@ final class Switcher {
         } else {
             index = (index + d + items.count) % items.count
         }
-        if panel.isVisible { view.update(items: items, selected: index, query: searching ? query : nil) }
+        if panel?.isVisible == true { view.update(items: items, selected: index, query: searching ? query : nil) }
     }
 
     /// 選んでいる項目に操作をして、一覧を作り直す
@@ -269,14 +330,14 @@ final class Switcher {
     private func cancel() {
         active = false
         searching = false
-        panel.orderOut(nil)
+        hidePanel()
     }
 
     func confirm() {
         guard active else { return }
         active = false
         searching = false
-        panel.orderOut(nil)
+        hidePanel()
         guard items.indices.contains(index) else { return }
         let it = items[index]
         if it.app.isHidden { it.app.unhide() }
@@ -293,6 +354,7 @@ final class Switcher {
     }
 
     private func show() {
+        let p = ensurePanel()
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
@@ -304,8 +366,8 @@ final class Switcher {
         var y = f.midY - size.height / 2 + f.height * 0.1
         y = min(y, f.maxY - f.height * 0.15 - size.height)
         y = max(y, f.minY + f.height * 0.15)
-        panel.setFrame(NSRect(x: f.midX - size.width / 2, y: y, width: size.width, height: size.height), display: true)
-        panel.orderFrontRegardless()
+        p.setFrame(NSRect(x: f.midX - size.width / 2, y: y, width: size.width, height: size.height), display: true)
+        p.orderFrontRegardless()
     }
 
     /// 窓の一覧：画面の前にある順（＝最近使った順に近い）→ 最小化・非表示 → 窓のないアプリ
