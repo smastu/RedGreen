@@ -75,11 +75,57 @@ final class CutPaste {
         DispatchQueue.main.async {
             switch key {
             case 36, 76: _ = self.pressMenu(pid, char: "O", mods: 0)       // Enter → 開く（⌘O）
-            case 51: _ = self.pressMenu(pid, vkey: 51, mods: 0)            // Delete → ゴミ箱に入れる（⌘⌫）
+            case 51: self.confirmTrash(pid)                                // Delete → 確認してゴミ箱に入れる（⌘⌫）
             default: self.postReturn()                                     // F2 → 名前の変更（Return）
             }
         }
         return true
+    }
+
+    /// Delete の前に確認する（Windows と同じ）
+    static var confirmDelete: Bool {
+        get { UserDefaults.standard.object(forKey: "confirmDelete") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "confirmDelete") }
+    }
+
+    private let scriptQueue = DispatchQueue(label: "RedGreen.CutPaste.script")
+    private lazy var selectionScript = NSAppleScript(source: """
+        tell application "Finder"
+            set out to {}
+            repeat with i in (get selection)
+                set end of out to name of i
+            end repeat
+            return out
+        end tell
+        """)
+
+    /// 選んでいる項目の名前を Finder に聞いて、確認してからゴミ箱へ
+    private func confirmTrash(_ pid: pid_t) {
+        guard CutPaste.confirmDelete else { _ = pressMenu(pid, vkey: 51, mods: 0); return }
+        let script = selectionScript
+        scriptQueue.async {
+            var err: NSDictionary?
+            let r = script?.executeAndReturnError(&err)
+            var names: [String] = []
+            if let r, r.numberOfItems > 0 {
+                for i in 1...r.numberOfItems { if let n = r.atIndex(i)?.stringValue { names.append(n) } }
+            }
+            DispatchQueue.main.async {
+                if err != nil { _ = self.pressMenu(pid, vkey: 51, mods: 0); return }   // 聞けなければ確認なし（⌘⌫ と同じ）
+                guard !names.isEmpty else { return }
+                let alert = NSAlert()
+                alert.messageText = names.count == 1 ? L("trash.one", names[0]) : L("trash.many", "\(names.count)")
+                if names.count > 1 { alert.informativeText = names.prefix(8).joined(separator: "\n") + (names.count > 8 ? "\n…" : "") }
+                alert.addButton(withTitle: L("trash.ok"))
+                alert.addButton(withTitle: L("trash.cancel"))
+                alert.icon = NSWorkspace.shared.icon(forFile: NSHomeDirectory() + "/.Trash")
+                NSApp.activate(ignoringOtherApps: true)
+                let ok = alert.runModal() == .alertFirstButtonReturn
+                NSRunningApplication(processIdentifier: pid)?.activate()
+                guard ok else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { _ = self.pressMenu(pid, vkey: 51, mods: 0) }
+            }
+        }
     }
 
     /// Finder のファイルの一覧（リスト・アイコン・カラム・ギャラリー表示、デスクトップ）にキーボードが向いているか

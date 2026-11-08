@@ -89,6 +89,11 @@ enum Lang {
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
         "menu.dockMin": "Click Front App's Dock Icon to Minimize (like Windows taskbar)",
         "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
+        "menu.confirmDelete": "Ask Before Moving to Trash with Delete",
+        "trash.one": "Move “%@” to the Trash?",
+        "trash.many": "Move %@ items to the Trash?",
+        "trash.ok": "Move to Trash",
+        "trash.cancel": "Cancel",
         "menu.yellow": "Long-press Yellow Button: Minimize Menu",
         "menu.yellowHover": "Also Show These Menus When Hovering",
         "menu.red": "Long-press Red Button: Close Window or Quit App",
@@ -154,6 +159,11 @@ enum Lang {
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
         "menu.dockMin": "前面のアプリの Dock アイコンを押したら Dock にしまう（Windows のタスクバー風）",
         "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
+        "menu.confirmDelete": "Delete でゴミ箱に入れる前に確認する",
+        "trash.one": "「%@」をゴミ箱に入れますか？",
+        "trash.many": "%@ 個の項目をゴミ箱に入れますか？",
+        "trash.ok": "ゴミ箱に入れる",
+        "trash.cancel": "キャンセル",
         "menu.yellow": "黄色ボタンの長押しでしまい方を選ぶ",
         "menu.yellowHover": "黄・赤ボタンにマウスを乗せたときもメニューを出す",
         "menu.red": "赤ボタンの長押しで「窓だけ閉じる／アプリを終了」を選ぶ",
@@ -965,6 +975,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dk.target = self; dk.state = Prefs.dockMin ? .on : .off
         let wk = m.addItem(withTitle: L("menu.finderWinKeys"), action: #selector(toggleWinKeys), keyEquivalent: "")
         wk.target = self; wk.state = CutPaste.winKeys ? .on : .off
+        let cd = m.addItem(withTitle: L("menu.confirmDelete"), action: #selector(toggleConfirmDelete), keyEquivalent: "")
+        cd.target = self; cd.state = CutPaste.confirmDelete ? .on : .off; cd.indentationLevel = 1
+        cd.isEnabled = CutPaste.winKeys
         let cx = m.addItem(withTitle: L("menu.cutPaste"), action: #selector(toggleCut), keyEquivalent: "")
         cx.target = self; cx.state = CutPaste.enabled ? .on : .off
         let fb = m.addItem(withTitle: L("menu.finderBar"), action: #selector(toggleFinderBar), keyEquivalent: "")
@@ -1091,6 +1104,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleCut() { CutPaste.enabled.toggle() }
     @objc func toggleDockMin() { Prefs.dockMin.toggle() }
     @objc func toggleWinKeys() { CutPaste.winKeys.toggle() }
+    @objc func toggleConfirmDelete() { CutPaste.confirmDelete.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
