@@ -636,9 +636,8 @@ let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)
     }
-    if Prefs.dockMin, let pid = dockClickOnFrontApp(e), !event.flags.contains(.maskAlternate) {
+    if Prefs.dockMin, !event.flags.contains(.maskAlternate), let pid = dockClickOnFrontApp(e), dockToggle(pid) {
         swallowUp = true
-        DispatchQueue.main.async { minimizeAllWindows(only: pid) }
         return nil
     }
     guard (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
@@ -813,7 +812,7 @@ func arrangeFinders() {
 
 // MARK: - Dock のアイコンで最小化（Windows のタスクバー風）
 
-/// 押したのが「前面のアプリ」の Dock アイコンで、そのアプリに出ている窓があれば、その pid
+/// 押したのが「前面のアプリ」の Dock アイコンなら、その pid
 func dockClickOnFrontApp(_ e: AXUIElement) -> pid_t? {
     guard (attr(e, kAXSubroleAttribute) as String?) == "AXApplicationDockItem",
           let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != getpid() else { return nil }
@@ -821,12 +820,43 @@ func dockClickOnFrontApp(_ e: AXUIElement) -> pid_t? {
     guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
           let url = (v as? URL) ?? (v as? NSURL as URL?),
           url.standardizedFileURL.path == front.bundleURL?.standardizedFileURL.path else { return nil }
-    let ax = AXUIElementCreateApplication(front.processIdentifier)
-    AXUIElementSetMessagingTimeout(ax, 0.3)
-    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
-    let open = ws.contains { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole
-                             && (attr($0, kAXMinimizedAttribute) as Bool?) != true }
-    return open ? front.processIdentifier : nil
+    return front.processIdentifier
+}
+
+/// RedGreen が Dock のクリックでしまった窓（もう一度押したら戻す）
+var dockMinimized: [pid_t: [AXUIElement]] = [:]
+
+/// アプリの窓が画面に出ているか。ステージマネージャでは、しまった窓も AXMinimized が false のままなので、
+/// 画面の窓の一覧で見る（横の列の小さな縮小表示は数えない）
+func hasVisibleWindow(_ pid: pid_t) -> Bool {
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return list.contains { w in
+        guard (w[kCGWindowOwnerPID as String] as? Int32) == pid, (w[kCGWindowLayer as String] as? Int) == 0,
+              let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
+        return (b["Width"] ?? 0) >= 200 && (b["Height"] ?? 0) >= 150
+    }
+}
+
+/// Dock のアイコンを押したとき：窓が出ていればしまう、RedGreen がしまった窓だけなら戻す。どちらでもなければ Dock に任せる
+func dockToggle(_ pid: pid_t) -> Bool {
+    if hasVisibleWindow(pid) {
+        DispatchQueue.main.async {
+            let before = minimizedByUs
+            minimizeAllWindows(only: pid)
+            dockMinimized[pid] = Array(minimizedByUs.dropFirst(before.count))
+        }
+        return true
+    }
+    guard let ws = dockMinimized.removeValue(forKey: pid), !ws.isEmpty else { return false }
+    DispatchQueue.main.async {
+        for w in ws.reversed() {
+            AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+        }
+        minimizedByUs.removeAll { m in ws.contains { CFEqual($0, m) } }
+        NSRunningApplication(processIdentifier: pid)?.activate()
+    }
+    return true
 }
 
 // MARK: - すべての窓を Dock にしまう
