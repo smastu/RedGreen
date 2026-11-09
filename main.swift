@@ -24,6 +24,7 @@ local.matsumoto.ResourceWatch
 
 """ }
 
+let autoQuitFile = supportDir.appendingPathComponent("auto_quit.txt")
 let keepFile = supportDir.appendingPathComponent("keep_running.txt")
 var defaultKeep: String { """
 \(L("file.keep.header"))
@@ -76,6 +77,8 @@ enum Lang {
         "menu.idle.window": "Apps with windows: %@",
         "menu.idle.recent": "Recently auto-quit",
         "menu.editKeep": "Edit excluded apps…",
+        "menu.editAutoQuit": "Edit apps to auto-quit…",
+        "file.autoQuit.header": "# Apps to quit automatically when unused (only these). One per line (app name or bundle ID). Lines starting with # are ignored\n# Empty = nothing is quit automatically",
         "menu.keepAlive": "Relaunch apps that quit unexpectedly",
         "menu.keepAlive.edit": "Edit apps to relaunch…",
         "menu.keepAlive.recent": "Recently relaunched",
@@ -162,6 +165,8 @@ enum Lang {
         "menu.idle.window": "窓があるアプリ：%@",
         "menu.idle.recent": "最近自動終了したアプリ",
         "menu.editKeep": "対象外のアプリを編集…",
+        "menu.editAutoQuit": "自動で終了するアプリを編集…",
+        "file.autoQuit.header": "# 使っていないときに自動で終了するアプリ（ここに書いたアプリだけ。1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視\n# 空なら何も自動で終了しない",
         "menu.keepAlive": "落ちたアプリを起動し直す",
         "menu.keepAlive.edit": "起動し直すアプリを編集…",
         "menu.keepAlive.recent": "最近起動し直したアプリ",
@@ -309,13 +314,22 @@ func L(_ key: String, _ args: String...) -> String {
 enum Prefs {
     /// 窓が 0 のアプリを自動終了するまでの分（0 ならしない）
     static var idleNoWindow: Int {
-        get { UserDefaults.standard.object(forKey: "idleNoWindow") as? Int ?? 0 }
+        get { UserDefaults.standard.object(forKey: "idleNoWindow") as? Int ?? 10 }
         set { UserDefaults.standard.set(newValue, forKey: "idleNoWindow") }
     }
     /// 窓があるアプリを自動終了するまでの分（0 ならしない）
     static var idleWindow: Int {
-        get { UserDefaults.standard.object(forKey: "idleWindow") as? Int ?? 0 }
+        get { UserDefaults.standard.object(forKey: "idleWindow") as? Int ?? 30 }
         set { UserDefaults.standard.set(newValue, forKey: "idleWindow") }
+    }
+    /// 自動終了の対象（auto_quit.txt に書いたアプリだけ。初期値は空＝何も終了しない）
+    static func autoQuit() -> Set<String> {
+        if !FileManager.default.fileExists(atPath: autoQuitFile.path) {
+            try? (L("file.autoQuit.header") + "\n").write(to: autoQuitFile, atomically: true, encoding: .utf8)
+        }
+        let t = (try? String(contentsOf: autoQuitFile, encoding: .utf8)) ?? ""
+        return Set(t.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") })
     }
     static func keep() -> Set<String> {
         if !FileManager.default.fileExists(atPath: keepFile.path) {
@@ -784,10 +798,13 @@ final class IdleWatcher {
         let userIdle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         guard userIdle < 120 else { return }          // 離席中は数えない
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let targets = Prefs.autoQuit()
+        guard !targets.isEmpty else { return }       // 登録がなければ何も終了しない
         let keep = Prefs.keep()
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let pid = app.processIdentifier
-            guard pid != getpid(), pid != front, !app.isTerminated, !Prefs.matches(app, keep) else { continue }
+            guard pid != getpid(), pid != front, !app.isTerminated,
+                  Prefs.matches(app, targets), !Prefs.matches(app, keep) else { continue }
             let n = (inactive[pid] ?? 0) + 1
             inactive[pid] = n
             let limit = standardWindowCount(pid) == 0 ? Prefs.idleNoWindow : Prefs.idleWindow
@@ -1190,7 +1207,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         minutesMenu(L("menu.idle.noWindow", label(Prefs.idleNoWindow)), Prefs.idleNoWindow) { Prefs.idleNoWindow = $0 }
         minutesMenu(L("menu.idle.window", label(Prefs.idleWindow)), Prefs.idleWindow) { Prefs.idleWindow = $0 }
         auto.addItem(.separator())
-        auto.addItem(withTitle: L("menu.editKeep"), action: #selector(editKeep), keyEquivalent: "").target = self
+        auto.addItem(withTitle: L("menu.editAutoQuit"), action: #selector(editAutoQuit), keyEquivalent: "").target = self
         if let r = idle?.recent, !r.isEmpty {
             auto.addItem(.separator())
             auto.addItem(withTitle: L("menu.idle.recent"), action: nil, keyEquivalent: "")
@@ -1276,6 +1293,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func editKeepAlive() {
         _ = KeepAlive.list()
         NSWorkspace.shared.open([keepAliveFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
+    @objc func editAutoQuit() {
+        _ = Prefs.autoQuit()
+        NSWorkspace.shared.open([autoQuitFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
                                 configuration: NSWorkspace.OpenConfiguration())
     }
     @objc func editKeep() {
