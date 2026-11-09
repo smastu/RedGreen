@@ -333,7 +333,7 @@ enum Prefs {
         set { UserDefaults.standard.set(newValue, forKey: "green") }
     }
     static var quitLast: Bool {
-        get { UserDefaults.standard.object(forKey: "quitLast") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "quitLast") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "quitLast") }
     }
     static var yellow: Bool {
