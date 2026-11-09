@@ -787,6 +787,7 @@ final class IdleWatcher {
     }
 
     func tick() {
+        memMark("自動終了の見回り")
         guard Prefs.idleNoWindow > 0 || Prefs.idleWindow > 0 else { return }
         let userIdle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
         guard userIdle < 120 else { return }          // 離席中は数えない
