@@ -1,7 +1,7 @@
 import AppKit
 import ApplicationServices
 
-// MARK: - Finder のタイトル（パス）・パスバーにマウスを止める／ダブルクリック → 「フォルダへ移動」（⌘⇧G）
+// MARK: - Finder のパスバーにマウスを止める／ダブルクリック → 「フォルダへ移動」（⌘⇧G）
 // パスバーの空いているところをダブルクリックすると、Finder の「フォルダへ移動」を開き、
 // 今のフォルダのパスを入れて全選択する（そのまま打ち直せる）。
 // パスバーのフォルダ名のダブルクリックは Finder 標準（そのフォルダへ移動）のまま。
@@ -42,7 +42,7 @@ enum PathBarGoTo {
         open(pid: pid, waitMouseUp: false)
     }
 
-    /// 前面の Finder の窓のタイトル（パス）か、パスバーの空いているところなら、その Finder の pid
+    /// 前面の Finder の窓のパスバーの空いているところなら、その Finder の pid
     private static func emptySpot(_ e: AXUIElement, _ loc: CGPoint, why: String) -> pid_t? {
         guard let finder = finderApp,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == finder.processIdentifier else { return nil }
@@ -54,13 +54,7 @@ enum PathBarGoTo {
         // 「フォルダへ移動」などのシートが出ている間は何もしない
         if let kids: [AXUIElement] = attr(w, kAXChildrenAttribute),
            kids.contains(where: { (attr($0, kAXRoleAttribute) as String?) == kAXSheetRole }) { return nil }
-        // 上：窓のタイトル（「パスを題名に表示」でフルパスが出ているところ）
-        if (attr(e, kAXRoleAttribute) as String?) == kAXStaticTextRole,
-           let v: String = attr(e, kAXValueAttribute), v.hasPrefix("/"),
-           let r = currentFrame(e), r.minY - f.minY < 60 {
-            log("タイトルの\(why)：\(v)")
-            return pid
-        }
+        // 上（窓のタイトル）は反応しない：窓をドラッグするときに邪魔になるため
         // 下：パスバーの帯（窓の下端から。ステータスバーがあればその分も）
         guard finderPref("ShowPathbar") else { return nil }
         let band: CGFloat = finderPref("ShowStatusBar") ? 56 : 32
