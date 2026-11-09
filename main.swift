@@ -87,14 +87,14 @@ enum Lang {
         "menu.switcher": "⌘Tab Switches Windows (like Windows Alt+Tab)",
         "menu.finderBar": "Editable Address Bar in Finder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
-        "menu.dockMin": "Click Front App's Dock Icon to Hide It (like Windows taskbar)",
+        "menu.dockMin": "Click Front App's Dock Icon to Minimize Its Windows (like Windows taskbar)",
         "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
         "menu.confirmDelete": "Ask Before Moving to Trash with Delete",
         "trash.one": "Move “%@” to the Trash?",
         "trash.many": "Move %@ items to the Trash?",
         "trash.ok": "Move to Trash",
         "trash.cancel": "Cancel",
-        "menu.yellow": "Yellow Button Hides the App (Long-press: Minimize Menu)",
+        "menu.yellow": "Yellow Button Menu (Long-press: Choose What to Minimize)",
         "menu.yellowHover": "Also Show These Menus When Hovering",
         "menu.red": "Long-press Red Button: Close Window or Quit App",
         "menu.close.window": "Close This Window Only",
@@ -168,21 +168,21 @@ enum Lang {
         "menu.switcher": "⌘Tab で窓ごとに切り替える（Windows の Alt+Tab 風）",
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
-        "menu.dockMin": "前面のアプリの Dock アイコンを押したら隠す（Windows のタスクバー風）",
+        "menu.dockMin": "前面のアプリの Dock アイコンを押したら窓をしまう（Windows のタスクバー風）",
         "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
         "menu.confirmDelete": "Delete でゴミ箱に入れる前に確認する",
         "trash.one": "「%@」をゴミ箱に入れますか？",
         "trash.many": "%@ 個の項目をゴミ箱に入れますか？",
         "trash.ok": "ゴミ箱に入れる",
         "trash.cancel": "キャンセル",
-        "menu.yellow": "黄色ボタンでアプリを隠す（長押しでしまい方を選ぶ）",
+        "menu.yellow": "黄色ボタンのメニュー（長押しで何をしまうか選ぶ）",
         "menu.yellowHover": "黄・赤ボタンにマウスを乗せたときもメニューを出す",
         "menu.red": "赤ボタンの長押しで「窓だけ閉じる／アプリを終了」を選ぶ",
         "menu.close.window": "この窓だけ閉じる",
         "menu.close.app": "%@ を終了",
         "menu.hide.app": "%@ を隠す",
         "menu.min.window": "この窓だけしまう",
-        "menu.min.app": "%@ の窓をすべて Dock にしまう",
+        "menu.min.app": "%@ の窓をすべてしまう",
         "menu.min.all": "すべてのアプリの窓をしまう",
         "switch.minimized": "（最小化）",
         "switch.hint": "⌘ を押したまま：W 閉じる・M しまう・Q 終了・H 隠す・F 全画面・S 検索・⌘` 同じアプリだけ",
@@ -499,18 +499,7 @@ var yellowDown: (win: AXUIElement, time: Date)?
 func yellowReleased(_ y: (win: AXUIElement, time: Date)) {
     memMark("黄色ボタン")
     if Date().timeIntervalSince(y.time) > 0.45 { showMinimizeMenu(y.win); return }
-    var pid: pid_t = 0
-    AXUIElementGetPid(y.win, &pid)
-    let app = NSRunningApplication(processIdentifier: pid)
-    let name = app?.localizedName ?? "?"
-    if app?.hide() == true { log("黄色ボタン：隠した（\(name)）"); return }
-    // 前面でないアプリなどで hide() が通らないことがあるので、アクセシビリティで隠す
-    let ax = AXUIElementCreateApplication(pid)
-    if AXUIElementSetAttributeValue(ax, kAXHiddenAttribute as CFString, kCFBooleanTrue) == .success {
-        log("黄色ボタン：AX で隠した（\(name)）"); return
-    }
-    log("黄色ボタン：隠せないので Dock にしまう（\(name)）")
-    AXUIElementSetAttributeValue(y.win, kAXMinimizedAttribute as CFString, kCFBooleanTrue)   // 隠せないアプリだけ従来どおり
+    AXUIElementSetAttributeValue(y.win, kAXMinimizedAttribute as CFString, kCFBooleanTrue)   // macOS 標準と同じ：この窓をしまう
 }
 
 func showMinimizeMenu(_ w: AXUIElement) {
@@ -520,12 +509,8 @@ func showMinimizeMenu(_ w: AXUIElement) {
     AXUIElementGetPid(w, &pid)
     let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
     let m = NSMenu()
-    addItem(m, L("menu.hide.app", name)) {
-        if NSRunningApplication(processIdentifier: pid)?.hide() != true {
-            AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXHiddenAttribute as CFString, kCFBooleanTrue)
-        }
-    }
     addItem(m, L("menu.min.window")) { AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue) }
+    addItem(m, L("menu.min.app", name)) { minimizeAllWindows(only: pid) }
     addItem(m, L("menu.min.all")) { minimizeAllWindows() }
     if !minimizedByUs.isEmpty {
         m.addItem(.separator())
@@ -981,7 +966,7 @@ func dockToggle(_ app: NSRunningApplication) -> Bool {
     }
     if hasVisibleWindow(pid) {
         guard isFront else { return false }                 // 後ろのアプリは Dock に任せて前に出す
-        DispatchQueue.main.async { _ = app.hide() }         // しまう代わりにアプリごと隠す（動きが出ない）
+        DispatchQueue.main.async { dockMinimized[pid] = minimizeAllWindows(only: pid) }   // アプリの窓をすべてしまう（もう一度押すと戻す）
         return true
     }
     guard let ws = dockMinimized.removeValue(forKey: pid), !ws.isEmpty else {
@@ -1013,7 +998,8 @@ func dockToggle(_ app: NSRunningApplication) -> Bool {
 var minimizedByUs: [AXUIElement] = []
 
 /// only を渡すとそのアプリの窓だけ
-func minimizeAllWindows(only: pid_t? = nil) {
+@discardableResult
+func minimizeAllWindows(only: pid_t? = nil) -> [AXUIElement] {
     memMark("すべてしまう")
     var done: [AXUIElement] = []
     for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid()
@@ -1030,6 +1016,7 @@ func minimizeAllWindows(only: pid_t? = nil) {
     }
     minimizedByUs = only == nil ? done : minimizedByUs + done
     log(L("log.minimizeAll", "\(done.count)"))
+    return done
 }
 
 func restoreMinimizedWindows() {
