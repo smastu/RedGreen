@@ -537,7 +537,7 @@ func showMinimizeMenu(_ w: AXUIElement) {
 }
 
 /// 黄色・赤ボタンにマウスを乗せて止めたら、メニューを出す（macOS の緑ボタンと同じ）
-/// 軽さ重視：マウスの位置を 0.15 秒ごとに見るだけ。0.5 秒止まったときだけ、そこが黄色・赤ボタンかを 1 回調べる
+/// 軽さ重視：マウスの位置を 0.15 秒ごとに見るだけ。止まったときだけ、そこが黄色・赤ボタンかを調べる（赤はすぐ、黄色は 0.5 秒で出す）
 final class ButtonHover {
     private var lastPos = CGPoint.zero
     private var restSince = Date()
@@ -558,14 +558,17 @@ final class ButtonHover {
             if let s = shownAt, hypot(p.x - s.x, p.y - s.y) > 12 { shownAt = nil }
             return
         }
-        guard !checked, shownAt == nil, Date().timeIntervalSince(restSince) > 0.5,
-              NSEvent.pressedMouseButtons == 0 else { return }
-        checked = true
+        // 赤ボタンは止まったらすぐ（間違って押して終了しないように）、黄色は 0.5 秒止まったら
+        let rest = Date().timeIntervalSince(restSince)
+        guard !checked, shownAt == nil, rest > 0.1, NSEvent.pressedMouseButtons == 0 else { return }
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success, let e = el,
               let sub: String = attr(e, kAXSubroleAttribute),
-              (sub == kAXMinimizeButtonSubrole && Prefs.yellow) || (sub == kAXCloseButtonSubrole && Prefs.red),
-              let win: AXUIElement = attr(e, kAXWindowAttribute) else { return }
+              (sub == kAXMinimizeButtonSubrole && Prefs.yellow) || (sub == kAXCloseButtonSubrole && Prefs.red)
+        else { checked = true; return }
+        if sub == kAXMinimizeButtonSubrole && rest <= 0.5 { return }   // 黄色はもう少し待つ
+        checked = true
+        guard let win: AXUIElement = attr(e, kAXWindowAttribute) else { return }
         var pid: pid_t = 0
         AXUIElementGetPid(e, &pid)
         if pid == getpid() { return }
