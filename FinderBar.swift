@@ -48,6 +48,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     private var lastWindow: AXUIElement?
     private var lastTitle = ""
     private var editing = false
+    var isEditing: Bool { editing }
     private let height: CGFloat = 26
     private let completer = PathCompleter()
 

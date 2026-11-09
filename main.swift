@@ -126,6 +126,7 @@ enum Lang {
         "log.secureOn": "Secure input is on (password field, remote desktop, etc.): using the standard ⌘Tab for now",
         "log.secureOff": "Secure input is off: ⌘Tab switches windows again",
         "log.secureOnHotKey": "Secure input is on: ⌘Tab now works via a hotkey (arrows and letter keys are unavailable meanwhile)",
+        "log.recycle": "Memory %@ MB (over %@ MB) and idle: restarting to return memory",
         "log.launch": "Launched (permission=%@)",
         "log.start": "Started (permission granted)",
         "log.quitLast": "%@: %@ has no windows → quit %@",
@@ -206,6 +207,7 @@ enum Lang {
         "log.secureOn": "セキュア入力がオン（パスワード欄・リモートデスクトップなど）：その間は標準の ⌘Tab に戻す",
         "log.secureOff": "セキュア入力がオフ：⌘Tab の窓切り替えに戻した",
         "log.secureOnHotKey": "セキュア入力がオン：⌘Tab はショートカットキーで受ける（その間は矢印・文字キーの操作は使えない）",
+        "log.recycle": "メモリ %@ MB（%@ MB 超え）で使っていないので、メモリを返すため起動し直す",
         "log.launch": "起動 許可=%@",
         "log.start": "開始（許可あり）",
         "log.quitLast": "%@：%@ の窓が 0 → 終了 %@",
@@ -1051,6 +1053,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         idle = IdleWatcher()
         Switcher.shared.applySystemHotKeys()
         Switcher.shared.watchSecureInput()
+        Recycler.shared.start()
         FinderBar.shared.start()
         buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)

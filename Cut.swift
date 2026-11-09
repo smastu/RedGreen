@@ -13,6 +13,8 @@ final class CutPaste {
 
     /// 切り取りの印：⌘C のあとのクリップボードの変更回数（ほかでコピーしたら印は無効）
     private var pending: Int?
+    /// 切り取りの印が無い（起動し直しても失うものが無い）
+    var isIdle: Bool { pending == nil }
     private let finderID = "com.apple.finder"
 
     /// Finder で Windows のキー：Enter で開く、Delete でゴミ箱、F2 で名前の変更
