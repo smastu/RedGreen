@@ -1054,6 +1054,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Switcher.shared.applySystemHotKeys()
         Switcher.shared.watchSecureInput()
         Recycler.shared.start()
+        if ProcessInfo.processInfo.environment["RG_DEBUG"] != nil {
+            DistributedNotificationCenter.default().addObserver(forName: .init("RedGreen.debug.cycle"), object: nil, queue: .main) { n in
+                let parts = (n.object as? String ?? "10 2").split(separator: " ")
+                Switcher.shared.debugCycle(Int(parts.first ?? "10") ?? 10, gap: Double(parts.last ?? "2") ?? 2)
+            }
+        }
         FinderBar.shared.start()
         buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)

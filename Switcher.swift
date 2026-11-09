@@ -111,6 +111,13 @@ final class Switcher {
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         p.contentView = v
+        if ProcessInfo.processInfo.environment["RG_SYNC_DRAW"] != nil {
+            v.wantsLayer = true
+            v.layer?.drawsAsynchronously = false
+            v.canDrawConcurrently = false
+            p.contentView?.superview?.wantsLayer = true
+            p.contentView?.superview?.layer?.drawsAsynchronously = false
+        }
         v.onPick = { [weak self] i in self?.index = i; self?.confirm() }
         v.onAction = { [weak self] i, a in self?.index = i; self?.act(a) }
         panel = p; view = v
@@ -121,7 +128,8 @@ final class Switcher {
         panel?.orderOut(nil)
         teardownWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            guard let self, !self.active, let p = self.panel else { return }
+            guard let self, !self.active, let p = self.panel,
+                  ProcessInfo.processInfo.environment["RG_KEEP_PANEL"] == nil else { return }
             p.contentView = nil
             p.close()
             self.panel = nil
@@ -251,6 +259,19 @@ final class Switcher {
         default: break
         }
         return true
+    }
+
+    /// 調査用（RG_DEBUG=1 で起動したときだけ）：一覧を出して消すのを n 回くり返し、メモリを記録する
+    func debugCycle(_ n: Int, gap: Double) {
+        guard n > 0 else { return }
+        begin(backward: false, sameApp: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.cancel()
+            DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
+                log(String(format: "debug cycle 残り%d %.1fMB", n - 1, Recycler.footprintMB()))
+                self?.debugCycle(n - 1, gap: gap)
+            }
+        }
     }
 
     private func begin(backward: Bool, sameApp: Bool) {
