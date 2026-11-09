@@ -356,7 +356,7 @@ enum Prefs {
 func log(_ m: String) {
     let f = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/RedGreen.log")
     let df = DateFormatter(); df.dateFormat = "MM-dd HH:mm:ss"
-    let line = "\(df.string(from: Date())) \(m)\n"
+    let line = "\(df.string(from: Date())) \(m) [\(String(format: "%.1f", Recycler.footprintMB()))MB]\n"
     if let h = try? FileHandle(forWritingTo: f) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
     else { try? line.write(to: f, atomically: true, encoding: .utf8) }
 }

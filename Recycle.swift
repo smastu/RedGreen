@@ -8,6 +8,7 @@ final class Recycler {
     let limitMB = 25.0
     let idleSec = 60.0
     private var timer: Timer?
+    private var lastMB = 0.0
 
     static func footprintMB() -> Double {
         var info = task_vm_info_data_t()
@@ -21,7 +22,7 @@ final class Recycler {
     }
 
     func start() {
-        guard ProcessInfo.processInfo.environment["RG_NO_RECYCLE"] == nil, timer == nil else { return }
+        guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             autoreleasepool { self?.check() }
         }
@@ -29,7 +30,10 @@ final class Recycler {
 
     private func check() {
         let mb = Recycler.footprintMB()
-        guard mb > limitMB else { return }
+        // どの操作のあとに増えたかを後で突き止めるため、30 秒で 2MB 以上増えたら記録する
+        if lastMB > 0, mb - lastMB >= 2 { log(String(format: "メモリが増えた：%.1f → %.1f MB", lastMB, mb)) }
+        lastMB = mb
+        guard mb > limitMB, ProcessInfo.processInfo.environment["RG_NO_RECYCLE"] == nil else { return }
         let anyInput = CGEventType(rawValue: ~0)!
         let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
         guard idle >= idleSec, !Switcher.shared.active, !FinderBar.shared.isEditing, CutPaste.shared.isIdle,
