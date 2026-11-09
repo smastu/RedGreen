@@ -375,6 +375,7 @@ final class Switcher {
     }
 
     private func show() {
+        memMark("⌘Tab の一覧")
         let p = ensurePanel()
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]

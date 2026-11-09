@@ -95,6 +95,7 @@ final class CutPaste {
 
     /// 選んでいる項目の名前を Finder に聞いて、確認してからゴミ箱へ
     private func confirmTrash(_ pid: pid_t) {
+        memMark("ゴミ箱の確認")
         guard CutPaste.confirmDelete else { _ = pressMenu(pid, vkey: 51, mods: 0); return }
         scriptQueue.async {
             let r = FinderAE.selectionNames()

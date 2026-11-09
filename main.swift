@@ -423,6 +423,7 @@ func originalFrame(_ w: AXUIElement) -> CGRect? {
 
 /// toggle：同じ配置がもう一度選ばれたら元に戻す。screen：並べる画面（省略時は窓のある画面）
 func place(_ w: AXUIElement, _ layout: Layout, toggle: Bool = true, screen: CGRect? = nil) {
+    memMark("緑ボタンの配置")
     guard let cur = currentFrame(w) else { return }
     savedFrames.removeAll { (attr($0.win, kAXRoleAttribute) as String?) == nil }   // 消えた窓は忘れる
     var original = cur
@@ -474,6 +475,7 @@ func greenReleased(_ g: (win: AXUIElement, loc: CGPoint, time: Date), at up: CGP
 var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
 
 func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
+    memMark("赤ボタン")
     if Date().timeIntervalSince(r.time) > 0.45 { showCloseMenu(r.button, pid: r.pid); return }
     let sub = isSubWindow(attr(r.button, kAXWindowAttribute) as AXUIElement?)
     let before = Prefs.quitLast && !sub ? standardWindowCount(r.pid) : 0
@@ -483,6 +485,7 @@ func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
 }
 
 func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
+    memMark("赤ボタンのメニュー")
     menuActions.removeAll()
     let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
     let m = NSMenu()
@@ -495,6 +498,7 @@ func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
 var yellowDown: (win: AXUIElement, time: Date)?
 
 func yellowReleased(_ y: (win: AXUIElement, time: Date)) {
+    memMark("黄色ボタン")
     if Date().timeIntervalSince(y.time) > 0.45 { showMinimizeMenu(y.win); return }
     var pid: pid_t = 0
     AXUIElementGetPid(y.win, &pid)
@@ -511,6 +515,7 @@ func yellowReleased(_ y: (win: AXUIElement, time: Date)) {
 }
 
 func showMinimizeMenu(_ w: AXUIElement) {
+    memMark("黄色ボタンのメニュー")
     menuActions.removeAll()
     var pid: pid_t = 0
     AXUIElementGetPid(w, &pid)
@@ -586,6 +591,7 @@ func addItem(_ m: NSMenu, _ title: String, _ f: @escaping () -> Void) {
 }
 
 func showLayoutMenu(_ w: AXUIElement) {
+    memMark("緑ボタンのメニュー")
     menuActions.removeAll()
     let m = NSMenu()
     addItem(m, L("menu.layout.left")) { place(w, .left) }
@@ -634,6 +640,7 @@ func isSubWindow(_ w: AXUIElement?) -> Bool {
 
 /// 窓を閉じる操作のあと、そのアプリの窓が 0 になっていたら終了（保存の確認などで遅れることがあるので数回確かめる）
 func checkQuit(pid: pid_t, before: Int, why: String) {
+    memMark("最後の窓で終了の確認")
     guard Prefs.quitLast, before > 0, pid != getpid(), !pendingQuit.contains(pid),
           let app = NSRunningApplication(processIdentifier: pid), app.activationPolicy == .regular else { return }
     let ex = Prefs.excluded()
@@ -668,6 +675,7 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     }
     if (type == .keyDown || type == .flagsChanged) && Switcher.shared.handle(type, event) { return nil }
     if type == .flagsChanged { return Unmanaged.passUnretained(event) }
+    if type == .keyDown { memMark("キー入力") }
     if type == .keyDown && CutPaste.shared.handle(event) { return nil }
     if type == .leftMouseUp && swallowUp {
         swallowUp = false
@@ -703,6 +711,7 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
         return Unmanaged.passUnretained(event)
     }
     guard type == .leftMouseDown else { return Unmanaged.passUnretained(event) }
+    memMark("クリック")
     let loc = event.location
     var el: AXUIElement?
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
@@ -980,6 +989,7 @@ func hasVisibleWindow(_ pid: pid_t) -> Bool {
 /// Dock のアイコンを押したとき：
 /// 前面のアプリで窓が出ていればしまう。窓が出ていなければ、しまってある窓を戻して前に出す。どちらでもなければ Dock に任せる
 func dockToggle(_ app: NSRunningApplication) -> Bool {
+    memMark("Dock のクリック")
     let pid = app.processIdentifier
     let isFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     if app.isHidden {                                        // 隠したアプリは一瞬で戻す
@@ -1021,6 +1031,7 @@ var minimizedByUs: [AXUIElement] = []
 
 /// only を渡すとそのアプリの窓だけ
 func minimizeAllWindows(only: pid_t? = nil) {
+    memMark("すべてしまう")
     var done: [AXUIElement] = []
     for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular && app.processIdentifier != getpid()
                                                          && (only == nil || app.processIdentifier == only) {
@@ -1039,6 +1050,7 @@ func minimizeAllWindows(only: pid_t? = nil) {
 }
 
 func restoreMinimizedWindows() {
+    memMark("しまった窓を戻す")
     for w in minimizedByUs.reversed() where (attr(w, kAXMinimizedAttribute) as Bool?) == true {
         AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
     }
@@ -1106,6 +1118,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // メニュー
     func menuNeedsUpdate(_ m: NSMenu) {
+        memMark("メニューバーのメニュー")
         m.removeAllItems()
         if !AXIsProcessTrusted() {
             m.addItem(withTitle: L("menu.needAX"), action: #selector(openAX), keyEquivalent: "").target = self

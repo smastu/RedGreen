@@ -168,6 +168,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
 
 
     private func refreshPath() {
+        memMark("アドレス欄の更新")
         // 題名がフルパスなら（Finder の「パスを題名に表示」）、それをそのまま使う。Finder に聞かずに済む
         var isDir: ObjCBool = false
         if lastTitle.hasPrefix("/"), FileManager.default.fileExists(atPath: lastTitle, isDirectory: &isDir), isDir.boolValue {
@@ -284,6 +285,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     }
 
     private func commit() {
+        memMark("アドレス欄で移動")
         let raw = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let p = (raw as NSString).expandingTildeInPath
         var isDir: ObjCBool = false

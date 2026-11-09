@@ -47,3 +47,16 @@ final class Recycler {
         exit(0)
     }
 }
+
+/// 調査用：操作の前のメモリを覚え、2 秒後に 1MB 以上増えていたら操作名を添えて記録する
+private var memMarkBusy: Set<String> = []
+func memMark(_ label: String) {
+    guard !memMarkBusy.contains(label) else { return }
+    memMarkBusy.insert(label)
+    let before = Recycler.footprintMB()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        memMarkBusy.remove(label)
+        let after = Recycler.footprintMB()
+        if after - before >= 1 { log(String(format: "メモリ +%.1f MB：%@ のあと", after - before, label)) }
+    }
+}
