@@ -301,12 +301,12 @@ func L(_ key: String, _ args: String...) -> String {
 enum Prefs {
     /// 窓が 0 のアプリを自動終了するまでの分（0 ならしない）
     static var idleNoWindow: Int {
-        get { UserDefaults.standard.object(forKey: "idleNoWindow") as? Int ?? 10 }
+        get { UserDefaults.standard.object(forKey: "idleNoWindow") as? Int ?? 0 }
         set { UserDefaults.standard.set(newValue, forKey: "idleNoWindow") }
     }
     /// 窓があるアプリを自動終了するまでの分（0 ならしない）
     static var idleWindow: Int {
-        get { UserDefaults.standard.object(forKey: "idleWindow") as? Int ?? 30 }
+        get { UserDefaults.standard.object(forKey: "idleWindow") as? Int ?? 0 }
         set { UserDefaults.standard.set(newValue, forKey: "idleWindow") }
     }
     static func keep() -> Set<String> {
