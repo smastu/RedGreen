@@ -716,6 +716,7 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     guard type == .leftMouseDown else { return Unmanaged.passUnretained(event) }
     memMark("クリック")
     let loc = event.location
+    PathBarGoTo.clicked(at: loc)                          // 開いた「フォルダへ移動」の外なら閉じる
     var el: AXUIElement?
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)

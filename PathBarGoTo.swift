@@ -98,12 +98,54 @@ enum PathBarGoTo {
                 let r: String = attr(field, kAXRoleAttribute) ?? ""
                 guard r == kAXTextFieldRole || r == kAXComboBoxRole else { continue }
                 let value = path.hasSuffix("/") ? path : path + "/"
+                arm(pid: pid, field: field)
                 AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, value as CFTypeRef)
                 var range = CFRange(location: 0, length: (value as NSString).length)
                 if let v = AXValueCreate(.cfRange, &range) {
                     AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, v)
                 }
                 return
+            }
+        }
+    }
+
+    // MARK: 開いた「フォルダへ移動」の外をクリックしたら取り消す
+    // RedGreen が開いたものだけが対象（自分で ⌘⇧G を押したもの・ほかの確認の画面には手を出さない）。
+    // クリックはそのまま渡すので、押した先の操作はふつうに効く。
+    private static var armed: (pid: pid_t, panel: AXUIElement)?
+
+    /// 入力欄を含むシート（無ければ窓）を覚える
+    private static func arm(pid: pid_t, field: AXUIElement) {
+        var cur: AXUIElement? = field
+        var panel: AXUIElement?
+        for _ in 0..<12 {
+            guard let c = cur, let r: String = attr(c, kAXRoleAttribute) else { break }
+            if r == kAXSheetRole || r == kAXWindowRole { panel = c; break }
+            cur = attr(c, kAXParentAttribute)
+        }
+        guard let panel else { return }
+        DispatchQueue.main.async { armed = (pid, panel) }
+        log("  外をクリックしたら閉じる：\((attr(panel, kAXRoleAttribute) as String?) ?? "?")")
+    }
+
+    /// クリックのたびに呼ぶ（イベントタップの中。重い処理は別スレッドで）
+    static func clicked(at loc: CGPoint) {
+        guard let a = armed else { return }
+        armed = nil
+        queue.async {
+            AXUIElementSetMessagingTimeout(a.panel, 0.3)
+            guard let f = currentFrame(a.panel) else { return }      // もう閉じている
+            guard !f.contains(loc) else {                              // 中のクリック → 見張りを続ける
+                DispatchQueue.main.async { if armed == nil { armed = a } }
+                return
+            }
+            log("「フォルダへ移動」の外をクリック → 閉じる")
+            // 取り消しボタンがあれば押す。無ければ Finder に Esc を送る
+            if let cancel: AXUIElement = attr(a.panel, kAXCancelButtonAttribute),
+               AXUIElementPerformAction(cancel, kAXPressAction as CFString) == .success { return }
+            let src = CGEventSource(stateID: .hidSystemState)
+            for down in [true, false] {
+                CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: down)?.postToPid(a.pid)   // Esc
             }
         }
     }
