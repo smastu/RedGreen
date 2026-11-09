@@ -100,7 +100,7 @@ enum Lang {
         "menu.close.window": "Close This Window Only",
         "menu.close.app": "Quit %@",
         "menu.hide.app": "Hide %@",
-        "menu.min.window": "Minimize This Window",
+        "menu.min.window": "Minimize Only This Window",
         "menu.min.app": "Minimize All %@ Windows",
         "menu.min.all": "Minimize All Apps' Windows",
         "switch.minimized": "(minimized)",
@@ -181,9 +181,9 @@ enum Lang {
         "menu.close.window": "この窓だけ閉じる",
         "menu.close.app": "%@ を終了",
         "menu.hide.app": "%@ を隠す",
-        "menu.min.window": "この窓を Dock にしまう",
+        "menu.min.window": "この窓だけしまう",
         "menu.min.app": "%@ の窓をすべて Dock にしまう",
-        "menu.min.all": "すべてのアプリの窓を Dock にしまう",
+        "menu.min.all": "すべてのアプリの窓をしまう",
         "switch.minimized": "（最小化）",
         "switch.hint": "⌘ を押したまま：W 閉じる・M しまう・Q 終了・H 隠す・F 全画面・S 検索・⌘` 同じアプリだけ",
         "switch.hintSearch": "英字で絞り込み・↑↓ 選ぶ・Return 切り替え・Esc 消す／閉じる",
@@ -197,7 +197,7 @@ enum Lang {
         "finderBar.needPermission": "Finder の操作を許可してください（システム設定 → プライバシーとセキュリティ → オートメーション）",
         "menu.minimizeAll": "すべての窓を Dock にしまう",
         "menu.restoreAll": "しまった窓を戻す（%@ 枚）",
-        "log.minimizeAll": "すべての窓を Dock にしまった：%@ 枚",
+        "log.minimizeAll": "すべての窓をしまった：%@ 枚",
         "menu.language": "言語（Language）",
         "menu.lang.auto": "自動（%@）",
         "menu.lang.openFolder": "言語パッチのフォルダを開く…",
@@ -526,7 +526,6 @@ func showMinimizeMenu(_ w: AXUIElement) {
         }
     }
     addItem(m, L("menu.min.window")) { AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue) }
-    addItem(m, L("menu.min.app", name)) { minimizeAllWindows(only: pid) }
     addItem(m, L("menu.min.all")) { minimizeAllWindows() }
     if !minimizedByUs.isEmpty {
         m.addItem(.separator())
