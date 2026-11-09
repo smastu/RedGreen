@@ -475,7 +475,7 @@ var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
 
 func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     memMark("赤ボタン")
-    if Date().timeIntervalSince(r.time) > 0.45, !isFinder(r.pid) { showCloseMenu(r.button, pid: r.pid); return }
+    if Date().timeIntervalSince(r.time) > 0.45, !noCloseMenu(pid: r.pid, button: r.button) { showCloseMenu(r.button, pid: r.pid); return }
     let sub = isSubWindow(attr(r.button, kAXWindowAttribute) as AXUIElement?)
     let before = Prefs.quitLast && !sub ? standardWindowCount(r.pid) : 0
     if sub { log("赤ボタン：サブウィンドウなのでアプリは終了しない（\(NSRunningApplication(processIdentifier: r.pid)?.localizedName ?? "?")）") }
@@ -483,9 +483,14 @@ func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     if Prefs.quitLast { checkQuit(pid: r.pid, before: before, why: L("why.red")) }
 }
 
-/// Finder は終了するとデスクトップのアイコンまで消えるので、赤ボタンのメニュー（終了）を出さない
-func isFinder(_ pid: pid_t) -> Bool {
-    NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder"
+/// 赤ボタンのメニュー（終了を含む）を出さない窓：従来どおり、クリックで窓を閉じるだけにする
+/// ・Finder（終了するとデスクトップのアイコンまで消える）
+/// ・「終了させないアプリ」の一覧（exclude.txt）に入っているアプリ
+/// ・設定などのサブウィンドウ（窓を閉じるだけが正しい）
+func noCloseMenu(pid: pid_t, button: AXUIElement) -> Bool {
+    guard let app = NSRunningApplication(processIdentifier: pid) else { return true }
+    if app.bundleIdentifier == "com.apple.finder" || Prefs.matches(app, Prefs.excluded()) { return true }
+    return isSubWindow(attr(button, kAXWindowAttribute) as AXUIElement?)
 }
 
 func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
@@ -560,7 +565,7 @@ final class ButtonHover {
         var pid: pid_t = 0
         AXUIElementGetPid(e, &pid)
         if pid == getpid() { return }
-        if sub == kAXCloseButtonSubrole && isFinder(pid) { return }   // Finder は終了させないので赤のメニューは出さない
+        if sub == kAXCloseButtonSubrole && noCloseMenu(pid: pid, button: e) { return }   // Finder・終了させないアプリ・サブウィンドウ
         shownAt = p
         if sub == kAXMinimizeButtonSubrole { showMinimizeMenu(win) } else { showCloseMenu(e, pid: pid) }
     }
