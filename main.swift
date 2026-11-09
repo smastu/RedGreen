@@ -475,12 +475,17 @@ var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
 
 func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     memMark("赤ボタン")
-    if Date().timeIntervalSince(r.time) > 0.45 { showCloseMenu(r.button, pid: r.pid); return }
+    if Date().timeIntervalSince(r.time) > 0.45, !isFinder(r.pid) { showCloseMenu(r.button, pid: r.pid); return }
     let sub = isSubWindow(attr(r.button, kAXWindowAttribute) as AXUIElement?)
     let before = Prefs.quitLast && !sub ? standardWindowCount(r.pid) : 0
     if sub { log("赤ボタン：サブウィンドウなのでアプリは終了しない（\(NSRunningApplication(processIdentifier: r.pid)?.localizedName ?? "?")）") }
     AXUIElementPerformAction(r.button, kAXPressAction as CFString)
     if Prefs.quitLast { checkQuit(pid: r.pid, before: before, why: L("why.red")) }
+}
+
+/// Finder は終了するとデスクトップのアイコンまで消えるので、赤ボタンのメニュー（終了）を出さない
+func isFinder(_ pid: pid_t) -> Bool {
+    NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder"
 }
 
 func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
@@ -555,6 +560,7 @@ final class ButtonHover {
         var pid: pid_t = 0
         AXUIElementGetPid(e, &pid)
         if pid == getpid() { return }
+        if sub == kAXCloseButtonSubrole && isFinder(pid) { return }   // Finder は終了させないので赤のメニューは出さない
         shownAt = p
         if sub == kAXMinimizeButtonSubrole { showMinimizeMenu(win) } else { showCloseMenu(e, pid: pid) }
     }
