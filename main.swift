@@ -86,6 +86,7 @@ enum Lang {
         "menu.finder.two": "Two Finder Windows Side by Side",
         "menu.switcher": "⌘Tab Switches Windows (like Windows Alt+Tab)",
         "menu.finderBar": "Editable Address Bar in Finder",
+        "menu.pathBarGoTo": "Finder Title / Path Bar (hover / double-click) → Go to Folder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
         "menu.dockMin": "Click Front App's Dock Icon to Minimize Its Windows (like Windows taskbar)",
         "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
@@ -167,6 +168,7 @@ enum Lang {
         "menu.finder.two": "Finder を 2 つ横に並べる",
         "menu.switcher": "⌘Tab で窓ごとに切り替える（Windows の Alt+Tab 風）",
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
+        "menu.pathBarGoTo": "Finder のタイトル・パスバーに止める／ダブルクリックで「フォルダへ移動」",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
         "menu.dockMin": "前面のアプリの Dock アイコンを押したら窓をしまう（Windows のタスクバー風）",
         "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
@@ -542,17 +544,19 @@ final class ButtonHover {
     }
 
     private func tick() {
-        guard Prefs.yellowHover, Prefs.yellow || Prefs.red else { return }
         let m = NSEvent.mouseLocation
         let primaryH = NSScreen.screens.first?.frame.height ?? 0
         let p = CGPoint(x: m.x, y: primaryH - m.y)          // AX の座標（左上原点）
         if hypot(p.x - lastPos.x, p.y - lastPos.y) > 2 {
             lastPos = p; restSince = Date(); checked = false
+            PathBarGoTo.mouseMoved()
             if let s = shownAt, hypot(p.x - s.x, p.y - s.y) > 12 { shownAt = nil }
             return
         }
-        // 赤ボタンは止まったらすぐ（間違って押して終了しないように）、黄色は 0.5 秒止まったら
         let rest = Date().timeIntervalSince(restSince)
+        PathBarGoTo.hover(p, rest: rest)                     // Finder のパスバーに止めたら「フォルダへ移動」
+        guard Prefs.yellowHover, Prefs.yellow || Prefs.red else { return }
+        // 赤ボタンは止まったらすぐ（間違って押して終了しないように）、黄色は 0.5 秒止まったら
         guard !checked, shownAt == nil, rest > 0.1, NSEvent.pressedMouseButtons == 0 else { return }
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success, let e = el,
@@ -695,6 +699,7 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)
     }
+    if PathBarGoTo.handle(event, element: e) { swallowUp = true; return nil }   // Finder に渡すと窓が拡大・縮小する
     if Prefs.dockMin, !event.flags.contains(.maskAlternate), appsLauncherToggle(e) {
         swallowUp = true
         return nil
@@ -1131,6 +1136,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cx.target = self; cx.state = CutPaste.enabled ? .on : .off
         let fb = m.addItem(withTitle: L("menu.finderBar"), action: #selector(toggleFinderBar), keyEquivalent: "")
         fb.target = self; fb.state = FinderBar.enabled ? .on : .off
+        let pg = m.addItem(withTitle: L("menu.pathBarGoTo"), action: #selector(togglePathBarGoTo), keyEquivalent: "")
+        pg.target = self; pg.state = PathBarGoTo.enabled ? .on : .off
         m.addItem(.separator())
 
         // Finder と並べる（メニューを開いたときの前面のアプリが対象）
@@ -1255,6 +1262,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleWinKeys() { CutPaste.winKeys.toggle() }
     @objc func toggleConfirmDelete() { CutPaste.confirmDelete.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
+    @objc func togglePathBarGoTo() { PathBarGoTo.enabled.toggle() }
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
     @objc func toggleQuit() { Prefs.quitLast.toggle() }

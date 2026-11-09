@@ -38,13 +38,15 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
     static let shared = FinderBar()
 
     static var enabled: Bool {
-        get { UserDefaults.standard.object(forKey: "finderBar") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "finderBar") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "finderBar") }
     }
 
     private let panel: KeyPanel
     private let field = AddressField(string: "")
     private var timer: Timer?
+    private var dragTimer: Timer?          // マウスを押している間だけ、窓を細かく追う
+    private var lastWindowID: CGWindowID = 0
     private var lastWindow: AXUIElement?
     private var lastTitle = ""
     private var editing = false
@@ -122,6 +124,7 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
         } else {
             timer?.invalidate()
             timer = nil
+            stopDragFollow()
             if !editing { panel.orderOut(nil) }
         }
     }
@@ -142,15 +145,17 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
         guard let w: AXUIElement = attr(ax, kAXFocusedWindowAttribute),
               (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole,
               (attr(w, "AXFullScreen") as Bool?) != true,
-              let f = currentFrame(w), f.width > 200 else {
+              let axFrame = currentFrame(w), axFrame.width > 200 else {
             if panel.isVisible && !editing { panel.orderOut(nil) }
             return
         }
-        // アクセシビリティの座標（左上原点）→ 画面の座標（左下原点）。窓の下端の内側に置く
-        let primaryH = NSScreen.screens.first?.frame.height ?? 0
-        let rect = NSRect(x: f.minX + 8, y: primaryH - f.maxY + 4, width: f.width - 16, height: height)
-        if panel.frame != rect { panel.setFrame(rect, display: true) }
+        var wid: CGWindowID = 0
+        lastWindowID = _AXUIElementGetWindow(w, &wid) == .success ? wid : 0
+        place(Self.liveFrame(lastWindowID) ?? axFrame)
         if !panel.isVisible { panel.orderFront(nil) }
+        // ドラッグ中はアクセシビリティの位置が更新されないことがある（macOS 27）。
+        // マウスを押している間だけ、WindowServer の位置を 1/60 秒ごとに追う（離したら止める）
+        if NSEvent.pressedMouseButtons & 1 != 0 { startDragFollow() }
 
         let title: String = attr(w, kAXTitleAttribute) ?? ""
         let changedWindow = lastWindow.map { !CFEqual($0, w) } ?? true
@@ -159,6 +164,39 @@ final class FinderBar: NSObject, NSTextFieldDelegate {
             lastTitle = title
             refreshPath()
         }
+    }
+
+    /// 窓の下端の内側に置く（f はアクセシビリティと同じ左上原点の座標）
+    private func place(_ f: CGRect) {
+        let primaryH = NSScreen.screens.first?.frame.height ?? 0
+        let rect = NSRect(x: f.minX + 8, y: primaryH - f.maxY + 4, width: f.width - 16, height: height)
+        if panel.frame != rect { panel.setFrame(rect, display: true) }
+    }
+
+    /// WindowServer が持っている今の窓の位置（ドラッグ中も最新。左上原点）
+    private static func liveFrame(_ wid: CGWindowID) -> CGRect? {
+        guard wid != 0,
+              let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], wid) as? [[String: Any]])?.first,
+              let b = info[kCGWindowBounds as String] as? NSDictionary,
+              let r = CGRect(dictionaryRepresentation: b), r.width > 200 else { return nil }
+        return r
+    }
+
+    private func startDragFollow() {
+        guard dragTimer == nil else { return }
+        dragTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard NSEvent.pressedMouseButtons & 1 != 0, let f = Self.liveFrame(self.lastWindowID) else {
+                self.stopDragFollow(); self.tick(); return
+            }
+            self.place(f)
+        }
+        RunLoop.main.add(dragTimer!, forMode: .common)
+    }
+
+    private func stopDragFollow() {
+        dragTimer?.invalidate()
+        dragTimer = nil
     }
 
     /// AppleScript は専用の裏スレッドで動かす（Finder の返事待ちや許可の確認で、キー操作を止めないため）
