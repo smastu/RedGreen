@@ -467,7 +467,6 @@ func greenReleased(_ g: (win: AXUIElement, loc: CGPoint, time: Date), at up: CGP
     let dx = up.x - g.loc.x, dy = up.y - g.loc.y
     if abs(dx) > 30, abs(dx) > abs(dy) { place(g.win, dx < 0 ? .left : .right); return }
     if dy < -30 { place(g.win, .fill); return }
-    if Date().timeIntervalSince(g.time) > 0.45 { showLayoutMenu(g.win); return }
     place(g.win, .fill)
 }
 
@@ -593,25 +592,6 @@ func addItem(_ m: NSMenu, _ title: String, _ f: @escaping () -> Void) {
     it.target = a
 }
 
-func showLayoutMenu(_ w: AXUIElement) {
-    memMark("緑ボタンのメニュー")
-    menuActions.removeAll()
-    let m = NSMenu()
-    addItem(m, L("menu.layout.left")) { place(w, .left) }
-    addItem(m, L("menu.layout.right")) { place(w, .right) }
-    addItem(m, L("menu.layout.fill")) { place(w, .fill) }
-    m.addItem(.separator())
-    addItem(m, L("menu.layout.withFinder")) { arrangeWithFinder(w) }
-    if originalFrame(w) != nil {
-        m.addItem(.separator())
-        addItem(m, L("menu.layout.restore")) { restore(w) }
-    }
-    m.addItem(.separator())
-    addItem(m, L("menu.layout.fullscreen")) {
-        AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanTrue)
-    }
-    m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-}
 
 let systemWide = AXUIElementCreateSystemWide()
 var swallowUp = false
