@@ -100,6 +100,7 @@ final class Switcher {
     private func ensurePanel() -> NSPanel {
         if let p = panel { return p }
         let v = SwitchView()
+        if SwitchView.cpuDraw { v.wantsLayer = true; v.layerContentsRedrawPolicy = .onSetNeedsDisplay }
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 100),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         p.level = .popUpMenu
@@ -262,10 +263,15 @@ final class Switcher {
     }
 
     /// 調査用（RG_DEBUG=1 で起動したときだけ）：一覧を出して消すのを n 回くり返し、メモリを記録する
+    var debugMoves = Int(ProcessInfo.processInfo.environment["RG_DEBUG_MOVES"] ?? "") ?? 0
     func debugCycle(_ n: Int, gap: Double) {
         guard n > 0 else { return }
         begin(backward: false, sameApp: false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+        // 実際の使い方に合わせ、出したまま選択を何度も動かす（描き直しを起こす）
+        for k in 0..<debugMoves {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 + Double(k) * 0.08) { [weak self] in self?.move(1) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6 + Double(debugMoves) * 0.08) { [weak self] in
             self?.cancel()
             DispatchQueue.main.asyncAfter(deadline: .now() + gap) {
                 log(String(format: "debug cycle 残り%d %.1fMB", n - 1, Recycler.footprintMB()))
@@ -388,7 +394,9 @@ final class Switcher {
         var y = f.midY - size.height / 2 + f.height * 0.1
         y = min(y, f.maxY - f.height * 0.15 - size.height)
         y = max(y, f.minY + f.height * 0.15)
-        p.setFrame(NSRect(x: f.midX - size.width / 2, y: y, width: size.width, height: size.height), display: true)
+        var x = f.midX - size.width / 2
+        if ProcessInfo.processInfo.environment["RG_DEBUG_OFFSCREEN"] != nil { x = -20000 }   // 調査用：見えない所に出す
+        p.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
         p.orderFrontRegardless()
     }
 
@@ -469,6 +477,43 @@ final class SwitchView: NSView {
     }
 
     override var isFlipped: Bool { true }
+
+    /// 描画は自前の CPU のビットマップに描いて層に貼るだけにする。
+    /// AppKit 任せだと、選択を動かして描き直しが続くと Core Animation が GPU（Metal）での描画に切り替え、
+    /// その準備で一時的に 60MB 前後を使い、閉じたあとも 10MB ほど戻らなかった（2026-11-09 の計測）
+    static let cpuDraw = ProcessInfo.processInfo.environment["RG_APPKIT_DRAW"] == nil
+    override var wantsUpdateLayer: Bool { SwitchView.cpuDraw }
+    override func updateLayer() {
+        guard let layer else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        let w = Int(ceil(bounds.width * scale)), h = Int(ceil(bounds.height * scale))
+        guard w > 0, h > 0 else { return }
+        // 絵の置き場は OS から直接借りる（mmap）。malloc に任せると、捨てた後も「空き」として抱えたまま返さなかった
+        let bpr = w * 4, size = bpr * h
+        // 画面と同じ色の決まりで描く（違うと表示の前に同じ大きさの複製が作られる）
+        let cs = window?.screen?.colorSpace?.cgColorSpace ?? NSScreen.main?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let mem = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0), mem != MAP_FAILED,
+              let ctx = CGContext(data: mem, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bpr,
+                                  space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return }
+        // 上が原点（isFlipped）に合わせる
+        ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: scale, y: -scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        effectiveAppearance.performAsCurrentDrawingAppearance { self.draw(self.bounds) }
+        NSGraphicsContext.restoreGraphicsState()
+        // 絵は同じ置き場をそのまま使い、絵が要らなくなったら munmap で OS に返す
+        guard let provider = CGDataProvider(dataInfo: nil, data: mem, size: size, releaseData: { _, p, n in
+                  munmap(UnsafeMutableRawPointer(mutating: p), n) }),
+              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr,
+                                space: cs,
+                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+                                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+        else { munmap(mem, size); return }
+        layer.contentsScale = scale
+        layer.contents = img
+    }
 
     /// マウスを乗せている項目（薄く強調し、ボタンを出す）
     private var hover: Int?
