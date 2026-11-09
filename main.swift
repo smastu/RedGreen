@@ -76,6 +76,10 @@ enum Lang {
         "menu.idle.window": "Apps with windows: %@",
         "menu.idle.recent": "Recently auto-quit",
         "menu.editKeep": "Edit excluded apps…",
+        "menu.keepAlive": "Relaunch apps that quit unexpectedly",
+        "menu.keepAlive.edit": "Edit apps to relaunch…",
+        "menu.keepAlive.recent": "Recently relaunched",
+        "file.keepAlive.header": "# Apps to relaunch when they quit unexpectedly (crash etc.). One per line (app name or bundle ID). Lines starting with # are ignored\n# Not relaunched when you quit them (⌘Q, Quit menu, Dock, Force Quit) or when RedGreen quits them",
         "menu.quit": "Quit apps",
         "menu.quit.all": "Quit all (%@)",
         "menu.quit.note": "Excluded: terminals, messaging apps, etc. (Edit…)",
@@ -158,6 +162,10 @@ enum Lang {
         "menu.idle.window": "窓があるアプリ：%@",
         "menu.idle.recent": "最近自動終了したアプリ",
         "menu.editKeep": "対象外のアプリを編集…",
+        "menu.keepAlive": "落ちたアプリを起動し直す",
+        "menu.keepAlive.edit": "起動し直すアプリを編集…",
+        "menu.keepAlive.recent": "最近起動し直したアプリ",
+        "file.keepAlive.header": "# 勝手に終了した（落ちた）ときに起動し直すアプリ（1 行に 1 つ。アプリ名かバンドル ID）。# の行は無視\n# 自分で終了したとき（⌘Q・メニューの終了・Dock・強制終了）や RedGreen が終了させたときは起動し直さない\n# 例：com.pcloud.pcloud.macos",
         "menu.quit": "アプリをまとめて終了",
         "menu.quit.all": "すべて終了（%@ 個）",
         "menu.quit.note": "対象外：ターミナル・連絡アプリなど（編集…）",
@@ -501,7 +509,7 @@ func showCloseMenu(_ button: AXUIElement, pid: pid_t) {
     let name = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
     let m = NSMenu()
     addItem(m, L("menu.close.window")) { AXUIElementPerformAction(button, kAXPressAction as CFString) }
-    addItem(m, L("menu.close.app", name)) { NSRunningApplication(processIdentifier: pid)?.terminate() }
+    addItem(m, L("menu.close.app", name)) { NSRunningApplication(processIdentifier: pid)?.rgTerminate() }
     m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
 }
 
@@ -636,7 +644,7 @@ func checkQuit(pid: pid_t, before: Int, why: String) {
             guard !app.isTerminated else { pendingQuit.remove(pid); return }
             let n = standardWindowCount(pid)
             if n == 0 {
-                log(L("log.quitLast", why, app.localizedName ?? "?", "\(app.terminate())"))
+                log(L("log.quitLast", why, app.localizedName ?? "?", "\(app.rgTerminate())"))
                 pendingQuit.remove(pid)
             } else { step() }
         }
@@ -655,6 +663,7 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
+    if type == .keyDown { KeepAlive.shared.keyDown(event) }
     if (type == .keyDown || type == .flagsChanged) && Switcher.shared.handle(type, event) { return nil }
     if type == .flagsChanged { return Unmanaged.passUnretained(event) }
     if type == .keyDown { memMark("キー入力") }
@@ -699,6 +708,8 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)
     }
+    var clickedPid: pid_t = 0
+    if AXUIElementGetPid(e, &clickedPid) == .success { KeepAlive.shared.clicked(pid: clickedPid) }
     if PathBarGoTo.handle(event, element: e) { swallowUp = true; return nil }   // Finder に渡すと窓が拡大・縮小する
     if Prefs.dockMin, !event.flags.contains(.maskAlternate), appsLauncherToggle(e) {
         swallowUp = true
@@ -784,7 +795,7 @@ final class IdleWatcher {
             let limit = standardWindowCount(pid) == 0 ? Prefs.idleNoWindow : Prefs.idleWindow
             guard limit > 0, n >= limit else { continue }
             let name = app.localizedName ?? "?"
-            log(L("log.autoQuit", name, "\(n)", "\(app.terminate())"))
+            log(L("log.autoQuit", name, "\(n)", "\(app.rgTerminate())"))
             inactive[pid] = 0              // 保存の確認などで終わらなかったら、また同じ時間待つ
             let df = DateFormatter(); df.dateFormat = "HH:mm"
             recent.insert("\(df.string(from: Date())) \(name)", at: 0)
@@ -1091,6 +1102,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         FinderBar.shared.start()
+        KeepAlive.shared.start()
         buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
@@ -1189,6 +1201,21 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let autoItem = m.addItem(withTitle: L("menu.idle"), action: nil, keyEquivalent: "")
         autoItem.submenu = auto
 
+        let ka = NSMenu()
+        ka.addItem(withTitle: L("menu.keepAlive.edit"), action: #selector(editKeepAlive), keyEquivalent: "").target = self
+        let names = KeepAlive.list().sorted()
+        if !names.isEmpty {
+            ka.addItem(.separator())
+            for x in names { ka.addItem(withTitle: "  " + x, action: nil, keyEquivalent: "") }
+        }
+        if !KeepAlive.shared.recent.isEmpty {
+            ka.addItem(.separator())
+            ka.addItem(withTitle: L("menu.keepAlive.recent"), action: nil, keyEquivalent: "")
+            for x in KeepAlive.shared.recent { ka.addItem(withTitle: "  " + x, action: nil, keyEquivalent: "") }
+        }
+        let kaItem = m.addItem(withTitle: L("menu.keepAlive"), action: nil, keyEquivalent: "")
+        kaItem.submenu = ka
+
         // まとめて終了
         let apps = quittableApps()
         let quit = NSMenu()
@@ -1198,7 +1225,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quit.addItem(.separator())
         for a in apps {
             let it = NSMenuItem(title: a.localizedName ?? "?", action: #selector(MenuAction.run), keyEquivalent: "")
-            let act = MenuAction { log(L("log.menuQuit", a.localizedName ?? "?", "\(a.terminate())")) }
+            let act = MenuAction { log(L("log.menuQuit", a.localizedName ?? "?", "\(a.rgTerminate())")) }
             minuteActions.append(act)
             it.target = act
             it.image = a.icon.map { i in let c = i.copy() as! NSImage; c.size = NSSize(width: 16, height: 16); return c }
@@ -1240,7 +1267,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var minuteActions: [MenuAction] = []
     func label(_ v: Int) -> String { v == 0 ? L("menu.off") : L("menu.minutes", "\(v)") }
     @objc func quitAll() {
-        for a in quittableApps() { log(L("log.quitAll", a.localizedName ?? "?", "\(a.terminate())")) }
+        for a in quittableApps() { log(L("log.quitAll", a.localizedName ?? "?", "\(a.rgTerminate())")) }
     }
     var finderActions: [MenuAction] = []
     @objc func twoFinders() { arrangeFinders() }
@@ -1248,6 +1275,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func restoreAll() { restoreMinimizedWindows() }
     @objc func openLangFolder() { NSWorkspace.shared.open(Lang.userDir) }
     @objc func exportLang() { NSWorkspace.shared.activateFileViewerSelecting([Lang.exportTemplate()]) }
+    @objc func editKeepAlive() {
+        _ = KeepAlive.list()
+        NSWorkspace.shared.open([keepAliveFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
     @objc func editKeep() {
         _ = Prefs.keep()
         NSWorkspace.shared.open([keepFile], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),

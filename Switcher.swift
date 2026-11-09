@@ -334,7 +334,7 @@ final class Switcher {
             guard let w else { NSSound.beep(); return }
             AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, it.minimized ? kCFBooleanFalse : kCFBooleanTrue)
         case .quit:
-            it.app.terminate()
+            it.app.rgTerminate()
         case .hide:
             if it.app.isHidden { it.app.unhide() } else { it.app.hide() }
         case .fullscreen:
