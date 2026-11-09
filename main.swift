@@ -892,11 +892,11 @@ func dockClickedApp(_ e: AXUIElement) -> NSRunningApplication? {
     guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
           let url = (v as? URL) ?? (v as? NSURL as URL?) else { return nil }
     let path = url.standardizedFileURL.path
-    // 同じアプリから複数のプロセスが動くことがある（ResourceWatch のメニューバー係と窓係など）。Dock に出ている方（.regular）を選ぶ
-    let ms = NSWorkspace.shared.runningApplications.filter {
-        $0.processIdentifier != getpid() && $0.bundleURL?.standardizedFileURL.path == path
+    // 同じアプリから複数のプロセスが動くことがある（ResourceWatch のメニューバー係と窓係など）。Dock に出ている方（.regular）を選ぶ。
+    // 普通のアプリでないもの（「アプリ」＝Apps.app のような裏方のアプリ）は Dock に任せる（横取りすると閉じられなくなる）
+    return NSWorkspace.shared.runningApplications.first {
+        $0.processIdentifier != getpid() && $0.activationPolicy == .regular && $0.bundleURL?.standardizedFileURL.path == path
     }
-    return ms.first { $0.activationPolicy == .regular } ?? ms.first
 }
 
 /// しまってある窓を戻す（RedGreen 以外でしまったもの：⌘M・黄色ボタンなど）。戻せたら true
