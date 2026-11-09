@@ -708,6 +708,10 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     guard AXUIElementCopyElementAtPosition(systemWide, Float(loc.x), Float(loc.y), &el) == .success, let e = el else {
         return Unmanaged.passUnretained(event)
     }
+    if Prefs.dockMin, !event.flags.contains(.maskAlternate), appsLauncherToggle(e) {
+        swallowUp = true
+        return nil
+    }
     if Prefs.dockMin, !event.flags.contains(.maskAlternate), let app = dockClickedApp(e), dockToggle(app) {
         swallowUp = true
         return nil
@@ -896,6 +900,34 @@ func dockClickedApp(_ e: AXUIElement) -> NSRunningApplication? {
     // 普通のアプリでないもの（「アプリ」＝Apps.app のような裏方のアプリ）は Dock に任せる（横取りすると閉じられなくなる）
     return NSWorkspace.shared.runningApplications.first {
         $0.processIdentifier != getpid() && $0.activationPolicy == .regular && $0.bundleURL?.standardizedFileURL.path == path
+    }
+}
+
+/// Dock の「アプリ」（Apps.app）：開いているときに押すと、macOS は「外を押した」で閉じた直後に開き直してしまう。
+/// 開いているときはクリックを止めて、閉じるだけにする（画面は Siri のプロセスが出している）
+let appsLauncherPath = "/System/Applications/Apps.app"
+func appsLauncherToggle(_ e: AXUIElement) -> Bool {
+    guard (attr(e, kAXSubroleAttribute) as String?) == "AXApplicationDockItem" else { return false }
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
+          let url = (v as? URL) ?? (v as? NSURL as URL?), url.standardizedFileURL.path == appsLauncherPath,
+          appsLauncherShown() else { return false }
+    DispatchQueue.main.async {
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: appsLauncherPath), configuration: NSWorkspace.OpenConfiguration())
+    }
+    return true
+}
+
+/// 「アプリ」の画面が出ているか（Siri のプロセスの大きな窓が画面の上の層にある）
+func appsLauncherShown() -> Bool {
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    return list.contains { w in
+        guard let layer = w[kCGWindowLayer as String] as? Int, layer > 0, layer < 1000,
+              let pid = w[kCGWindowOwnerPID as String] as? pid_t,
+              let b = w[kCGWindowBounds as String] as? [String: CGFloat], (b["Width"] ?? 0) > 300 else { return false }
+        var buf = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
+        return String(cString: buf).contains("/Siri")
     }
 }
 
