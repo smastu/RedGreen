@@ -486,11 +486,9 @@ var redDown: (button: AXUIElement, pid: pid_t, time: Date)?
 func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     memMark("赤ボタン")
     if Date().timeIntervalSince(r.time) > 0.45, !noCloseMenu(pid: r.pid, button: r.button) { showCloseMenu(r.button, pid: r.pid); return }
-    let sub = isSubWindow(attr(r.button, kAXWindowAttribute) as AXUIElement?)
-    let before = Prefs.quitLast && !sub ? standardWindowCount(r.pid) : 0
-    if sub { log("赤ボタン：サブウィンドウなのでアプリは終了しない（\(NSRunningApplication(processIdentifier: r.pid)?.localizedName ?? "?")）") }
+    // すぐ押したときは窓を閉じるだけ。最後の窓でもアプリは終了しない（間違って終了しないように）。
+    // アプリの終了は、乗せる・長押しで出るメニューの「アプリを終了」を選んだときだけ
     AXUIElementPerformAction(r.button, kAXPressAction as CFString)
-    if Prefs.quitLast { checkQuit(pid: r.pid, before: before, why: L("why.red")) }
 }
 
 /// 赤ボタンのメニュー（終了を含む）を出さない窓：従来どおり、クリックで窓を閉じるだけにする
