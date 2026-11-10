@@ -508,6 +508,7 @@ func redReleased(_ r: (button: AXUIElement, pid: pid_t, time: Date)) {
     if Date().timeIntervalSince(r.time) > 0.45, !noCloseMenu(pid: r.pid, button: r.button) { showCloseMenu(r.button, pid: r.pid); return }
     // すぐ押したときは窓を閉じるだけ。最後の窓でもアプリは終了しない（間違って終了しないように）。
     // アプリの終了は、乗せる・長押しで出るメニューの「アプリを終了」を選んだときだけ
+    if closeAloneFirst(attr(r.button, kAXWindowAttribute) as AXUIElement?) { return }
     AXUIElementPerformAction(r.button, kAXPressAction as CFString)
 }
 
@@ -713,7 +714,13 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
             let pid = front.processIdentifier
             let ax = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(ax, 0.3)
-            if isSubWindow(attr(ax, kAXFocusedWindowAttribute) as AXUIElement?) { return Unmanaged.passUnretained(event) }
+            let fw: AXUIElement? = attr(ax, kAXFocusedWindowAttribute)
+            if let fw, let w = aloneWin, CFEqual(fw, w) {           // Dock から開いた Finder の窓：元のアプリを先に戻してから閉じる
+                DispatchQueue.main.async { if !closeAloneFirst(fw), let c: AXUIElement = attr(fw, kAXCloseButtonAttribute) {
+                    AXUIElementPerformAction(c, kAXPressAction as CFString) } }
+                return nil
+            }
+            if isSubWindow(fw) { return Unmanaged.passUnretained(event) }
             let before = Prefs.quitLast ? standardWindowCount(pid) : 0
             DispatchQueue.main.async { checkQuit(pid: pid, before: before, why: L("why.cmdW")) }
         }
@@ -1002,7 +1009,7 @@ func watchAloneWindow(_ w: AXUIElement, finderPid: pid_t, back: NSRunningApplica
     guard AXObserverCreate(finderPid, { _, _, _, _ in
         guard let back = aloneBack, !back.isTerminated else { return }
         if let o = aloneObserver { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
-        aloneObserver = nil; aloneBack = nil
+        aloneObserver = nil; aloneBack = nil; aloneWin = nil
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" else { return }
         let ax = AXUIElementCreateApplication(back.processIdentifier)
         if let bw: AXUIElement = attr(ax, kAXMainWindowAttribute) ?? attr(ax, kAXFocusedWindowAttribute),
@@ -1016,6 +1023,25 @@ func watchAloneWindow(_ w: AXUIElement, finderPid: pid_t, back: NSRunningApplica
     CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
     aloneObserver = obs
     aloneBack = back
+    aloneWin = w
+}
+var aloneWin: AXUIElement?
+
+/// Dock から開いた Finder の窓を赤ボタン・⌘W で閉じるとき：先に元のアプリの窓を前に戻してから閉じる。
+/// 閉じてから戻すと、Finder の次の窓が一瞬前に出てしまうため。対象の窓でなければ false
+func closeAloneFirst(_ win: AXUIElement?) -> Bool {
+    guard let win, let w = aloneWin, CFEqual(win, w), let back = aloneBack, !back.isTerminated,
+          NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" else { return false }
+    if let o = aloneObserver { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
+    aloneObserver = nil; aloneBack = nil; aloneWin = nil
+    let ax = AXUIElementCreateApplication(back.processIdentifier)
+    if let bw: AXUIElement = attr(ax, kAXMainWindowAttribute) ?? attr(ax, kAXFocusedWindowAttribute),
+       focusOnlyWindow(bw, pid: back.processIdentifier) {} else { back.activate(options: []) }
+    if let close: AXUIElement = attr(w, kAXCloseButtonAttribute) {
+        AXUIElementPerformAction(close, kAXPressAction as CFString)
+    }
+    log("開いた Finder の窓を閉じる → 先に \(back.localizedName ?? "") の窓を前に")
+    return true
 }
 
 /// 調査用：手前の窓 6 枚（番号:アプリ）
