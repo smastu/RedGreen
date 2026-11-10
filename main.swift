@@ -96,6 +96,7 @@ enum Lang {
         "menu.pathBarGoTo": "Finder Path Bar (hover / double-click) → Go to Folder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
         "menu.dockMin": "Click Front App's Dock Icon to Minimize Its Windows (like Windows taskbar)",
+        "menu.dockFinder": "Dock: Finder Opens a New Window, Folders Open in Finder",
         "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
         "menu.confirmDelete": "Ask Before Moving to Trash with Delete",
         "trash.one": "Move “%@” to the Trash?",
@@ -184,6 +185,7 @@ enum Lang {
         "menu.pathBarGoTo": "Finder のパスバーに止める／ダブルクリックで「フォルダへ移動」",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
         "menu.dockMin": "前面のアプリの Dock アイコンを押したら窓をしまう（Windows のタスクバー風）",
+        "menu.dockFinder": "Dock の Finder で新しい窓、フォルダ（ダウンロードなど）は Finder で開く",
         "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
         "menu.confirmDelete": "Delete でゴミ箱に入れる前に確認する",
         "trash.one": "「%@」をゴミ箱に入れますか？",
@@ -357,6 +359,10 @@ enum Prefs {
     static var yellowHover: Bool {
         get { UserDefaults.standard.object(forKey: "yellowHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "yellowHover") }
+    }
+    static var dockFinder: Bool {
+        get { UserDefaults.standard.object(forKey: "dockFinder") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "dockFinder") }
     }
     static var dockMin: Bool {
         get { UserDefaults.standard.object(forKey: "dockMin") as? Bool ?? true }
@@ -724,6 +730,10 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
     var clickedPid: pid_t = 0
     if AXUIElementGetPid(e, &clickedPid) == .success { KeepAlive.shared.clicked(pid: clickedPid) }
     if PathBarGoTo.handle(event, element: e) { swallowUp = true; return nil }   // Finder に渡すと窓が拡大・縮小する
+    if Prefs.dockFinder, !event.flags.contains(.maskAlternate), dockFinderOrFolder(e) {
+        swallowUp = true
+        return nil
+    }
     if Prefs.dockMin, !event.flags.contains(.maskAlternate), appsLauncherToggle(e) {
         swallowUp = true
         return nil
@@ -905,6 +915,37 @@ func arrangeFinders() {
     ensureFinderWindows(2) { fs in
         if fs.count >= 2 { sideBySide(fs[0], fs[1]) }
     }
+}
+
+// MARK: - Dock の Finder は新しい窓、フォルダは Finder で開く
+
+/// Dock の Finder を押したら新しい Finder の窓を開く。フォルダ（ダウンロードなど）を押したら、スタックではなく Finder で開く。
+/// ~/Applications の中のフォルダ（アプリをまとめたスタック）はスタックのまま。⌥ を押しながらなら標準の動き
+func dockFinderOrFolder(_ e: AXUIElement) -> Bool {
+    let sub: String = attr(e, kAXSubroleAttribute) ?? ""
+    guard sub == "AXApplicationDockItem" || sub == "AXFolderDockItem" else { return false }
+    var v: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(e, kAXURLAttribute as CFString, &v) == .success,
+          let url = (v as? URL) ?? (v as? NSURL as URL?) else { return false }
+    let path = url.standardizedFileURL.path
+    if sub == "AXApplicationDockItem" {
+        guard path == "/System/Library/CoreServices/Finder.app", let finder = finderApp else { return false }
+        log("Dock の Finder → 新しい窓")
+        DispatchQueue.main.async {
+            finder.activate()
+            let src = CGEventSource(stateID: .hidSystemState)
+            for down in [true, false] {                      // ⌘N を Finder に直接送る
+                let k = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)
+                k?.flags = .maskCommand
+                k?.postToPid(finder.processIdentifier)
+            }
+        }
+        return true
+    }
+    guard !(path + "/").hasPrefix(NSHomeDirectory() + "/Applications/") else { return false }
+    log("Dock のフォルダ → Finder で開く：\(path)")
+    DispatchQueue.main.async { NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true)) }
+    return true
 }
 
 // MARK: - Dock のアイコンで最小化（Windows のタスクバー風）
@@ -1155,6 +1196,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         se.target = self; se.indentationLevel = 1
         let dk = m.addItem(withTitle: L("menu.dockMin"), action: #selector(toggleDockMin), keyEquivalent: "")
         dk.target = self; dk.state = Prefs.dockMin ? .on : .off
+        let df = m.addItem(withTitle: L("menu.dockFinder"), action: #selector(toggleDockFinder), keyEquivalent: "")
+        df.target = self; df.state = Prefs.dockFinder ? .on : .off
         let wk = m.addItem(withTitle: L("menu.finderWinKeys"), action: #selector(toggleWinKeys), keyEquivalent: "")
         wk.target = self; wk.state = CutPaste.winKeys ? .on : .off
         let cd = m.addItem(withTitle: L("menu.confirmDelete"), action: #selector(toggleConfirmDelete), keyEquivalent: "")
@@ -1312,6 +1355,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleRed() { Prefs.red.toggle() }
     @objc func toggleCut() { CutPaste.enabled.toggle() }
     @objc func toggleDockMin() { Prefs.dockMin.toggle() }
+    @objc func toggleDockFinder() { Prefs.dockFinder.toggle() }
     @objc func toggleWinKeys() { CutPaste.winKeys.toggle() }
     @objc func toggleConfirmDelete() { CutPaste.confirmDelete.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }

@@ -387,7 +387,7 @@ final class Switcher {
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
         // 高さは画面の 70% まで（上下 15% は空ける）。幅は画面の 90% まで
-        view.limit = NSSize(width: f.width * 0.9, height: f.height * 0.7)
+        view.limit = NSSize(width: f.width * 0.9 / SwitchView.zoom, height: f.height * 0.7 / SwitchView.zoom)
         view.update(items: items, selected: index, query: searching ? query : nil)
         let size = view.fittingSize
         // 少ないときは少し上寄せ。多いときも上下 15% の余白は守る
@@ -477,6 +477,8 @@ final class SwitchView: NSView {
     }
 
     override var isFlipped: Bool { true }
+    /// 一覧の拡大率。中の配置（行の高さ・文字・アイコン）はすべて 1 倍で決め、表示のときにまとめて拡大する
+    static let zoom: CGFloat = 1.5
 
     /// 描画は自前の CPU のビットマップに描いて層に貼るだけにする。
     /// AppKit 任せだと、選択を動かして描き直しが続くと Core Animation が GPU（Metal）での描画に切り替え、
@@ -485,7 +487,7 @@ final class SwitchView: NSView {
     override var wantsUpdateLayer: Bool { SwitchView.cpuDraw }
     override func updateLayer() {
         guard let layer else { return }
-        let scale = window?.backingScaleFactor ?? 2
+        let scale = (window?.backingScaleFactor ?? 2) * SwitchView.zoom
         let w = Int(ceil(bounds.width * scale)), h = Int(ceil(bounds.height * scale))
         guard w > 0, h > 0 else { return }
         // 絵の置き場は OS から直接借りる（mmap）。malloc に任せると、捨てた後も「空き」として抱えたまま返さなかった
@@ -550,11 +552,17 @@ final class SwitchView: NSView {
         first = max(0, min(first, max(0, items.count - capacity)))
         if cols == 2 { first = (first / rows) * rows }
         setFrameSize(fittingSize)
+        setBoundsSize(layoutSize)                 // 中は 1 倍の座標のまま（描画・クリックの位置）、見た目だけ zoom 倍
         needsDisplay = true
     }
 
-    override var fittingSize: NSSize {
+    /// 1 倍での大きさ
+    private var layoutSize: NSSize {
         NSSize(width: max(width, 420), height: headH + CGFloat(rows) * rowH + pad * 2 + footH)
+    }
+    /// 画面での大きさ（zoom 倍）
+    override var fittingSize: NSSize {
+        NSSize(width: layoutSize.width * SwitchView.zoom, height: layoutSize.height * SwitchView.zoom)
     }
 
     override func draw(_ dirty: NSRect) {

@@ -30,11 +30,12 @@ enum PathBarGoTo {
         return true
     }
 
-    // マウスオーバー：パスバーの空いているところに 0.5 秒止めたら開く（離れるまで出し直さない）
+    // マウスオーバー：パスバーの空いているところに hoverDelay 秒止めたら開く（離れるまで出し直さない）
+    static let hoverDelay: TimeInterval = 0.25
     private static var hoverDone = false
     static func mouseMoved() { hoverDone = false }
     static func hover(_ p: CGPoint, rest: TimeInterval) {
-        guard enabled, !hoverDone, rest > 0.5, NSEvent.pressedMouseButtons == 0 else { return }
+        guard enabled, !hoverDone, rest > hoverDelay, NSEvent.pressedMouseButtons == 0 else { return }
         hoverDone = true
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success, let e = el else { return }
