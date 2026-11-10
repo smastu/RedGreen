@@ -946,6 +946,7 @@ func finderNewWindowAlone(_ path: String?) {
     guard let finder = finderApp else { return }
     let pid = finder.processIdentifier
     let before = Set(finderWindowIDs(pid))
+    log("重なり順（押したとき）：\(topWindowsDesc())")
     DispatchQueue.global(qos: .userInitiated).async {
         let ok = FinderAE.newWindow(path)
         DispatchQueue.main.async {
@@ -973,6 +974,7 @@ func finderNewWindowAlone(_ path: String?) {
                     let ok = focusOnlyWindow(w, pid: pid)
                     log("Finder の新しい窓 \(id) だけを前に（\(tries) 回目, \(ok ? "成功" : "失敗→activate")）")
                     if !ok { finder.activate(options: []) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { log("重なり順（1 秒後）：\(topWindowsDesc())") }
                     return
                 }
                 tries += 1
@@ -985,6 +987,13 @@ func finderNewWindowAlone(_ path: String?) {
             raise()
         }
     }
+}
+
+/// 調査用：手前の窓 6 枚（番号:アプリ）
+func topWindowsDesc() -> String {
+    let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return l.filter { ($0[kCGWindowLayer as String] as? Int) == 0 }.prefix(6)
+        .map { "\($0[kCGWindowNumber as String] ?? 0):\($0[kCGWindowOwnerName as String] ?? "")" }.joined(separator: " ")
 }
 
 /// Finder の窓の番号の一覧
