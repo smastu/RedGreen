@@ -943,10 +943,12 @@ func dockFinderOrFolder(_ e: AXUIElement) -> Bool {
 /// 新しい Finder 窓を開いて、その窓だけを前に出す（ほかの Finder の窓は後ろのまま）。
 /// Apple Event が使えないとき（自動操作の許可がないなど）は、これまでどおり Dock と同じ開き方
 func finderNewWindowAlone(_ path: String?) {
+    guard let finder = finderApp else { return }
+    let pid = finder.processIdentifier
+    let before = Set(finderWindowIDs(pid))
     DispatchQueue.global(qos: .userInitiated).async {
         let ok = FinderAE.newWindow(path)
         DispatchQueue.main.async {
-            guard let finder = finderApp else { return }
             guard ok else {
                 log("Finder の新しい窓：Apple Event が使えない → 標準の開き方")
                 if let path { NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true)); return }
@@ -955,18 +957,33 @@ func finderNewWindowAlone(_ path: String?) {
                 for down in [true, false] {                  // ⌘N を Finder に直接送る
                     let k = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)
                     k?.flags = .maskCommand
-                    k?.postToPid(finder.processIdentifier)
+                    k?.postToPid(pid)
                 }
                 return
             }
-            // 新しい窓は Finder の中でいちばん前になっている。それを上げて、全窓ではなくその窓だけで Finder を前にする
-            let ax = AXUIElementCreateApplication(finder.processIdentifier)
-            if let w: AXUIElement = attr(ax, kAXMainWindowAttribute) ?? attr(ax, kAXFocusedWindowAttribute) {
-                AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+            // 新しくできた窓を探して、その窓だけを最前面にする（⌘Tab と同じ方法。ほかの Finder の窓の重なり順は変えない）
+            var tries = 0
+            func raise() {
+                let ax = AXUIElementCreateApplication(pid)
+                let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+                if let w = ws.first(where: { var id: CGWindowID = 0
+                                            return _AXUIElementGetWindow($0, &id) == .success && id != 0 && !before.contains(id) }) {
+                    if !focusOnlyWindow(w, pid: pid) { finder.activate(options: []) }
+                    return
+                }
+                tries += 1
+                if tries < 20 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raise() } }
+                else if let w: AXUIElement = attr(ax, kAXMainWindowAttribute), focusOnlyWindow(w, pid: pid) {}
             }
-            finder.activate(options: [])
+            raise()
         }
     }
+}
+
+/// Finder の窓の番号の一覧
+func finderWindowIDs(_ pid: pid_t) -> [CGWindowID] {
+    let ws: [AXUIElement] = attr(AXUIElementCreateApplication(pid), kAXWindowsAttribute) ?? []
+    return ws.compactMap { var id: CGWindowID = 0; return _AXUIElementGetWindow($0, &id) == .success ? id : nil }
 }
 
 // MARK: - Dock のアイコンで最小化（Windows のタスクバー風）
