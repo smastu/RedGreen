@@ -946,6 +946,7 @@ func finderNewWindowAlone(_ path: String?) {
     guard let finder = finderApp else { return }
     let pid = finder.processIdentifier
     let before = Set(finderWindowIDs(pid))
+    let prevApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.processIdentifier == pid ? nil : $0 }
     log("重なり順（押したとき）：\(topWindowsDesc())")
     DispatchQueue.global(qos: .userInitiated).async {
         let ok = FinderAE.newWindow(path)
@@ -974,6 +975,7 @@ func finderNewWindowAlone(_ path: String?) {
                     let ok = focusOnlyWindow(w, pid: pid)
                     log("Finder の新しい窓 \(id) だけを前に（\(tries) 回目, \(ok ? "成功" : "失敗→activate")）")
                     if !ok { finder.activate(options: []) }
+                    if let prevApp { watchAloneWindow(w, finderPid: pid, back: prevApp) }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { log("重なり順（1 秒後）：\(topWindowsDesc())") }
                     return
                 }
@@ -987,6 +989,33 @@ func finderNewWindowAlone(_ path: String?) {
             raise()
         }
     }
+}
+
+/// その窓を閉じたとき：macOS は Finder の次の窓を前に出してしまう（アプリ A の後ろにあった窓が出てくる）。
+/// 閉じたときにまだ Finder が前なら、押す前に前にいたアプリの窓を前に戻す
+var aloneObserver: AXObserver?
+var aloneBack: NSRunningApplication?
+func watchAloneWindow(_ w: AXUIElement, finderPid: pid_t, back: NSRunningApplication) {
+    if let o = aloneObserver { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
+    aloneObserver = nil
+    var obs: AXObserver?
+    guard AXObserverCreate(finderPid, { _, _, _, _ in
+        guard let back = aloneBack, !back.isTerminated else { return }
+        if let o = aloneObserver { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode) }
+        aloneObserver = nil; aloneBack = nil
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.finder" else { return }
+        let ax = AXUIElementCreateApplication(back.processIdentifier)
+        if let bw: AXUIElement = attr(ax, kAXMainWindowAttribute) ?? attr(ax, kAXFocusedWindowAttribute),
+           focusOnlyWindow(bw, pid: back.processIdentifier) {
+            log("開いた Finder の窓を閉じた → \(back.localizedName ?? "") の窓を前に戻す")
+        } else {
+            back.activate(options: [])
+        }
+    }, &obs) == .success, let obs else { return }
+    AXObserverAddNotification(obs, w, kAXUIElementDestroyedNotification as CFString, nil)
+    CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+    aloneObserver = obs
+    aloneBack = back
 }
 
 /// 調査用：手前の窓 6 枚（番号:アプリ）
