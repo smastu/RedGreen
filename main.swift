@@ -968,12 +968,19 @@ func finderNewWindowAlone(_ path: String?) {
                 let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
                 if let w = ws.first(where: { var id: CGWindowID = 0
                                             return _AXUIElementGetWindow($0, &id) == .success && id != 0 && !before.contains(id) }) {
-                    if !focusOnlyWindow(w, pid: pid) { finder.activate(options: []) }
+                    var id: CGWindowID = 0; _ = _AXUIElementGetWindow(w, &id)
+                    AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)   // Finder の中でもこの窓を主に（前の主の窓が一緒に出ないように）
+                    let ok = focusOnlyWindow(w, pid: pid)
+                    log("Finder の新しい窓 \(id) だけを前に（\(tries) 回目, \(ok ? "成功" : "失敗→activate")）")
+                    if !ok { finder.activate(options: []) }
                     return
                 }
                 tries += 1
                 if tries < 20 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { raise() } }
-                else if let w: AXUIElement = attr(ax, kAXMainWindowAttribute), focusOnlyWindow(w, pid: pid) {}
+                else {
+                    log("Finder の新しい窓が見つからない（前の窓 \(before.count) 枚、今 \(ws.count) 枚）")
+                    if let w: AXUIElement = attr(ax, kAXMainWindowAttribute) { _ = focusOnlyWindow(w, pid: pid) }
+                }
             }
             raise()
         }
