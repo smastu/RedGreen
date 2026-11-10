@@ -31,7 +31,7 @@ enum PathBarGoTo {
     }
 
     // マウスオーバー：パスバーの空いているところに hoverDelay 秒止めたら開く（離れるまで出し直さない）
-    static let hoverDelay: TimeInterval = 0.25
+    static let hoverDelay: TimeInterval = 0.1
     private static var hoverDone = false
     static func mouseMoved() { hoverDone = false }
     static func hover(_ p: CGPoint, rest: TimeInterval) {
