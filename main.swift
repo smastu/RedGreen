@@ -929,23 +929,44 @@ func dockFinderOrFolder(_ e: AXUIElement) -> Bool {
           let url = (v as? URL) ?? (v as? NSURL as URL?) else { return false }
     let path = url.standardizedFileURL.path
     if sub == "AXApplicationDockItem" {
-        guard path == "/System/Library/CoreServices/Finder.app", let finder = finderApp else { return false }
+        guard path == "/System/Library/CoreServices/Finder.app", finderApp != nil else { return false }
         log("Dock の Finder → 新しい窓")
-        DispatchQueue.main.async {
-            finder.activate()
-            let src = CGEventSource(stateID: .hidSystemState)
-            for down in [true, false] {                      // ⌘N を Finder に直接送る
-                let k = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)
-                k?.flags = .maskCommand
-                k?.postToPid(finder.processIdentifier)
-            }
-        }
+        finderNewWindowAlone(nil)
         return true
     }
     guard !(path + "/").hasPrefix(NSHomeDirectory() + "/Applications/") else { return false }
     log("Dock のフォルダ → Finder で開く：\(path)")
-    DispatchQueue.main.async { NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true)) }
+    finderNewWindowAlone(path)
     return true
+}
+
+/// 新しい Finder 窓を開いて、その窓だけを前に出す（ほかの Finder の窓は後ろのまま）。
+/// Apple Event が使えないとき（自動操作の許可がないなど）は、これまでどおり Dock と同じ開き方
+func finderNewWindowAlone(_ path: String?) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let ok = FinderAE.newWindow(path)
+        DispatchQueue.main.async {
+            guard let finder = finderApp else { return }
+            guard ok else {
+                log("Finder の新しい窓：Apple Event が使えない → 標準の開き方")
+                if let path { NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true)); return }
+                finder.activate()
+                let src = CGEventSource(stateID: .hidSystemState)
+                for down in [true, false] {                  // ⌘N を Finder に直接送る
+                    let k = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)
+                    k?.flags = .maskCommand
+                    k?.postToPid(finder.processIdentifier)
+                }
+                return
+            }
+            // 新しい窓は Finder の中でいちばん前になっている。それを上げて、全窓ではなくその窓だけで Finder を前にする
+            let ax = AXUIElementCreateApplication(finder.processIdentifier)
+            if let w: AXUIElement = attr(ax, kAXMainWindowAttribute) ?? attr(ax, kAXFocusedWindowAttribute) {
+                AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+            }
+            finder.activate(options: [])
+        }
+    }
 }
 
 // MARK: - Dock のアイコンで最小化（Windows のタスクバー風）

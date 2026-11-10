@@ -29,12 +29,12 @@ enum FinderAE {
     }
 
     /// 送って返事を待つ。失敗したら OSStatus（-1743 は自動操作の許可がない）
-    private static func send(_ cls: String, _ id: String, direct: NSAppleEventDescriptor,
+    private static func send(_ cls: String, _ id: String, direct: NSAppleEventDescriptor?,
                              params: [(String, NSAppleEventDescriptor)] = []) -> Result<NSAppleEventDescriptor, AEError> {
         let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.finder")
         let ev = NSAppleEventDescriptor(eventClass: code(cls), eventID: code(id), targetDescriptor: target,
                                         returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
-        ev.setParam(direct, forKeyword: code("----"))
+        if let direct { ev.setParam(direct, forKeyword: code("----")) }
         for (k, v) in params { ev.setParam(v, forKeyword: code(k)) }
         do {
             let r = try ev.sendEvent(options: [.waitForReply], timeout: 3)
@@ -56,6 +56,17 @@ enum FinderAE {
     static func setFrontTarget(_ path: String) -> Bool {
         guard let d = NSAppleEventDescriptor(fileURL: URL(fileURLWithPath: path)) as NSAppleEventDescriptor? else { return false }
         if case .success = send("core", "setd", direct: prop("fvtg", of: window1), params: [("data", d)]) { return true }
+        return false
+    }
+
+    /// 新しい Finder 窓を開く（path があればそのフォルダ）。Apple Event で頼むと Finder は前に出てこない
+    /// （Dock や NSWorkspace で開くと Finder の窓がすべて前に出てしまう）
+    static func newWindow(_ path: String?) -> Bool {
+        var params: [(String, NSAppleEventDescriptor)] = [("kocl", NSAppleEventDescriptor(typeCode: code("brow")))]
+        if let path, let d = NSAppleEventDescriptor(fileURL: URL(fileURLWithPath: path)) as NSAppleEventDescriptor? {
+            params.append(("to  ", d))
+        }
+        if case .success = send("core", "crel", direct: nil, params: params) { return true }
         return false
     }
 
