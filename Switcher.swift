@@ -127,6 +127,7 @@ final class Switcher {
 
     private func hidePanel() {
         panel?.orderOut(nil)
+        view.dropSurface()                            // 絵の置き場はすぐ返す
         teardownWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self, !self.active, let p = self.panel,
@@ -483,6 +484,7 @@ final class SwitchView: NSView {
     /// 描画は自前の CPU のビットマップに描いて層に貼るだけにする。
     /// AppKit 任せだと、選択を動かして描き直しが続くと Core Animation が GPU（Metal）での描画に切り替え、
     /// その準備で一時的に 60MB 前後を使い、閉じたあとも 10MB ほど戻らなかった（2026-11-09 の計測）
+    static let debugSize = ProcessInfo.processInfo.environment["RG_DEBUG"] != nil
     static let cpuDraw = ProcessInfo.processInfo.environment["RG_APPKIT_DRAW"] == nil
     override var wantsUpdateLayer: Bool { SwitchView.cpuDraw }
     override func updateLayer() {
@@ -490,32 +492,44 @@ final class SwitchView: NSView {
         let scale = (window?.backingScaleFactor ?? 2) * SwitchView.zoom
         let w = Int(ceil(bounds.width * scale)), h = Int(ceil(bounds.height * scale))
         guard w > 0, h > 0 else { return }
-        // 絵の置き場は OS から直接借りる（mmap）。malloc に任せると、捨てた後も「空き」として抱えたまま返さなかった
-        let bpr = w * 4, size = bpr * h
-        // 画面と同じ色の決まりで描く（違うと表示の前に同じ大きさの複製が作られる）
+        // 絵の置き場は IOSurface（画面に出す側が複製せずにそのまま使える置き場）。大きさが同じなら使い回す。
+        // CGImage を渡すと Core Animation が同じ大きさの複製を作り、1.5 倍表示では一時的に 30MB 以上増えていた
         let cs = window?.screen?.colorSpace?.cgColorSpace ?? NSScreen.main?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
-        guard let mem = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0), mem != MAP_FAILED,
-              let ctx = CGContext(data: mem, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bpr,
+        if surface == nil || surface!.width != w || surface!.height != h {
+            surface = IOSurface(properties: [.width: w, .height: h, .bytesPerElement: 4,
+                                             .pixelFormat: 0x42475241 /* 'BGRA' */])
+            if let sf = surface, let icc = cs.copyICCData() {
+                IOSurfaceSetValue(unsafeBitCast(sf, to: IOSurfaceRef.self), kIOSurfaceColorSpace, icc)
+            }
+        }
+        guard let sf = surface else { return }
+        if SwitchView.debugSize { log("一覧の絵 \(w)×\(h) = \(sf.allocationSize / 1_048_576) MB") }
+        sf.lock(options: [], seed: nil)
+        defer { sf.unlock(options: [], seed: nil) }
+        guard let ctx = CGContext(data: sf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: sf.bytesPerRow,
                                   space: cs,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return }
+        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
         // 上が原点（isFlipped）に合わせる
         ctx.translateBy(x: 0, y: CGFloat(h)); ctx.scaleBy(x: scale, y: -scale)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
         effectiveAppearance.performAsCurrentDrawingAppearance { self.draw(self.bounds) }
         NSGraphicsContext.restoreGraphicsState()
-        // 絵は同じ置き場をそのまま使い、絵が要らなくなったら munmap で OS に返す
-        guard let provider = CGDataProvider(dataInfo: nil, data: mem, size: size, releaseData: { _, p, n in
-                  munmap(UnsafeMutableRawPointer(mutating: p), n) }),
-              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bpr,
-                                space: cs,
-                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
-                                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
-        else { munmap(mem, size); return }
         layer.contentsScale = scale
-        layer.contents = img
+        layer.cornerRadius = 14 * SwitchView.zoom
+        layer.masksToBounds = true
+        layer.borderWidth = SwitchView.zoom
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer.borderColor = NSColor.separatorColor.cgColor }
+        // 同じ置き場に描き直したときは「中身が変わった」と知らせる（公開されていないので、あるときだけ）
+        let changed = Selector(("setContentsChanged"))
+        if layer.contents as AnyObject? === sf, layer.responds(to: changed) { layer.perform(changed) }
+        else { layer.contents = nil; layer.contents = sf }
     }
+    /// 一覧の絵の置き場（隠したら捨てる）
+    var surface: IOSurface?
+    func dropSurface() { layer?.contents = nil; surface = nil }
 
     /// マウスを乗せている項目（薄く強調し、ボタンを出す）
     private var hover: Int?
@@ -566,11 +580,17 @@ final class SwitchView: NSView {
     }
 
     override func draw(_ dirty: NSRect) {
-        let bg = NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14)
         NSColor.windowBackgroundColor.withAlphaComponent(0.96).setFill()
-        bg.fill()
-        NSColor.separatorColor.setStroke()
-        bg.stroke()
+        if SwitchView.cpuDraw {
+            // 角丸と縁は層に任せ、ここでは四角に塗るだけ。一覧全体の大きさの角丸を塗る・縁取ると、
+            // CoreGraphics が一覧と同じ大きさの作業用の領域（約 4MB）を毎回確保し、malloc が手放さずに抱えていた
+            bounds.fill()
+        } else {
+            let bg = NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14)
+            bg.fill()
+            NSColor.separatorColor.setStroke()
+            bg.stroke()
+        }
 
         let sub: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
 
