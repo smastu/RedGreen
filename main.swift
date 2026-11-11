@@ -96,7 +96,11 @@ enum Lang {
         "menu.finderBar": "Editable Address Bar in Finder",
         "menu.pathBarGoTo": "Finder Path Bar (hover / double-click) → Go to Folder",
         "menu.cutPaste": "⌘X → ⌘V Moves Files in Finder",
-        "menu.dockMin": "Click Front App's Dock Icon to Minimize Its Windows (like Windows taskbar)",
+        "menu.dockMin": "Click an App's Dock Icon for a Menu (window list, open all, close all)",
+        "menu.dock.noWindows": "No open windows",
+        "menu.dock.openAll": "Open all windows (show and activate)",
+        "menu.dock.closeAll": "Close all windows",
+        "menu.dock.minAll": "Minimize all windows",
         "menu.dockFinder": "Dock: Finder Opens a New Window, Folders Open in Finder",
         "menu.finderWinKeys": "Finder: Enter Opens, Delete Trashes, F2 Renames",
         "menu.confirmDelete": "Ask Before Moving to Trash with Delete",
@@ -186,7 +190,11 @@ enum Lang {
         "menu.finderBar": "Finder に編集できるアドレス欄を出す",
         "menu.pathBarGoTo": "Finder のパスバーに止める／ダブルクリックで「フォルダへ移動」",
         "menu.cutPaste": "Finder で ⌘X → ⌘V をファイルの移動にする",
-        "menu.dockMin": "前面のアプリの Dock アイコンを押したら窓をしまう（Windows のタスクバー風）",
+        "menu.dockMin": "Dock アイコンのクリックでメニュー（窓一覧・全て開く・全て閉じる）",
+        "menu.dock.noWindows": "開いている窓はありません",
+        "menu.dock.openAll": "全て開く（窓を出してアクティブに）",
+        "menu.dock.closeAll": "全て閉じる",
+        "menu.dock.minAll": "全てしまう",
         "menu.dockFinder": "Dock の Finder で新しい窓、フォルダ（ダウンロードなど）は Finder で開く",
         "menu.finderWinKeys": "Finder で Enter で開く・Delete でゴミ箱・F2 で名前の変更",
         "menu.confirmDelete": "Delete でゴミ箱に入れる前に確認する",
@@ -747,9 +755,18 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
         swallowUp = true
         return nil
     }
-    if Prefs.dockMin, !event.flags.contains(.maskAlternate), let app = dockClickedApp(e), dockToggle(app) {
-        swallowUp = true
-        return nil
+    if Prefs.dockMin, !event.flags.contains(.maskAlternate), let app = dockClickedApp(e) {
+        let n = standardWindowCount(app.processIdentifier)
+        if n >= 2 {                                   // 窓が2つ以上のときだけメニュー（窓一覧・全て開く・全て閉じる）
+            swallowUp = true
+            DispatchQueue.main.async { showDockMenu(app) }
+            return nil
+        }
+        if n == 1, dockToggle(app) {                  // 窓が1つなら従来どおり（クリックでしまう／戻す）
+            swallowUp = true
+            return nil
+        }
+        // 窓が無いアプリ・未起動のアプリはメニューを出さず、Dock に任せて窓を開く／起動する
     }
     guard (attr(e, kAXRoleAttribute) as String?) == kAXButtonRole,
           let sub: String = attr(e, kAXSubroleAttribute) else {
@@ -1176,6 +1193,75 @@ func dockToggle(_ app: NSRunningApplication) -> Bool {
         NSRunningApplication(processIdentifier: pid)?.activate()
     }
     return true
+}
+
+/// Dock アイコンのクリックで出すメニュー（赤ボタンのメニューと同じ出し方）。
+/// 立ち上がっている窓の一覧（押すとその窓を前に）／全て開く／全て閉じる／全てしまう。
+func showDockMenu(_ app: NSRunningApplication) {
+    memMark("Dock のメニュー")
+    menuActions.removeAll()
+    let pid = app.processIdentifier
+    let name = app.localizedName ?? "?"
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    let all: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    let wins = all.filter { (attr($0, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole }
+    let m = NSMenu()
+    let head = m.addItem(withTitle: name, action: nil, keyEquivalent: "")
+    head.isEnabled = false
+    m.addItem(.separator())
+    if wins.isEmpty {
+        let it = m.addItem(withTitle: L("menu.dock.noWindows"), action: nil, keyEquivalent: "")
+        it.isEnabled = false
+    } else {
+        for w in wins {
+            var title = (attr(w, kAXTitleAttribute) as String?) ?? ""
+            if title.isEmpty { title = name }
+            let mini = (attr(w, kAXMinimizedAttribute) as Bool?) == true
+            addItem(m, (mini ? "▽ " : "　") + title) {
+                AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+                NSRunningApplication(processIdentifier: pid)?.activate()
+            }
+        }
+    }
+    m.addItem(.separator())
+    addItem(m, L("menu.dock.openAll")) { raiseAllWindows(pid) }
+    addItem(m, L("menu.dock.closeAll")) { closeAllWindows(pid) }
+    addItem(m, L("menu.dock.minAll")) { _ = minimizeAllWindows(only: pid) }
+    m.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+}
+
+/// そのアプリの窓をすべて出して（しまってあるものも戻して）アクティブにする
+func raiseAllWindows(_ pid: pid_t) {
+    memMark("Dock：全て開く")
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    var raised = false
+    for w in ws where (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole {
+        AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+        raised = true
+    }
+    _ = restoreMinimized(pid)                 // アプリのアイコンにしまって一覧から消えた窓も戻す
+    if !raised, let url = NSRunningApplication(processIdentifier: pid)?.bundleURL {
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())   // 窓がなければ開き直す
+    }
+    NSRunningApplication(processIdentifier: pid)?.activate()
+}
+
+/// そのアプリの窓をすべて閉じる（各窓の赤ボタンを押す。保存の確認が出ることがある）
+func closeAllWindows(_ pid: pid_t) {
+    memMark("Dock：全て閉じる")
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.5)
+    let ws: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+    for w in ws where (attr(w, kAXSubroleAttribute) as String?) == kAXStandardWindowSubrole {
+        if let cb: AXUIElement = attr(w, kAXCloseButtonAttribute) {
+            AXUIElementPerformAction(cb, kAXPressAction as CFString)
+        }
+    }
 }
 
 // MARK: - すべての窓を Dock にしまう
