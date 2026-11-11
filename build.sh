@@ -4,7 +4,7 @@ set -e
 cd "${0:a:h}"
 APP="$HOME/Applications/RedGreen.app"
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift FinderAE.swift Recycle.swift PathBarGoTo.swift KeepAlive.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
+swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift FinderAE.swift Recycle.swift PathBarGoTo.swift KeepAlive.swift Update.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
 cp build/RedGreen "$APP/Contents/MacOS/.RedGreen.new"
 mv -f "$APP/Contents/MacOS/.RedGreen.new" "$APP/Contents/MacOS/RedGreen"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -24,6 +24,8 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>Finder のアドレス欄に今のフォルダを表示・移動するために使います / Used to show and change the current Finder folder in the address bar.</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
+<key>RGBuiltCommit</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo unknown)</string>
+<key>RGRepoDir</key><string>$PWD</string>
 </dict></plist>
 PL
 # 自己署名の証明書で署名する（毎回同じ署名になり、アクセシビリティの許可が消えない）。無ければ ad-hoc

@@ -88,6 +88,7 @@ enum Lang {
         "menu.quit.note": "Excluded: terminals, messaging apps, etc. (Edit…)",
         "menu.login": "Launch at login",
         "menu.quitSelf": "Quit RedGreen",
+        "menu.update.available": "⬆︎ Update available — click to update",
         "menu.layout.withFinder": "Side by Side with Finder",
         "menu.finder.withApp": "Put %@ and Finder Side by Side",
         "menu.finder.two": "Two Finder Windows Side by Side",
@@ -177,6 +178,7 @@ enum Lang {
         "menu.quit.note": "対象外：ターミナル・連絡アプリなど（編集…）",
         "menu.login": "ログイン時に起動",
         "menu.quitSelf": "RedGreen を終了",
+        "menu.update.available": "⬆︎ アップデートがあります（クリックで更新）",
         "menu.layout.withFinder": "Finder と横に並べる",
         "menu.finder.withApp": "%@ と Finder を横に並べる",
         "menu.finder.two": "Finder を 2 つ横に並べる",
@@ -1260,6 +1262,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         FinderBar.shared.start()
         KeepAlive.shared.start()
+        Updater.shared.start()
         buttonHover = ButtonHover()
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue) | (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
@@ -1275,6 +1278,15 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ m: NSMenu) {
         memMark("メニューバーのメニュー")
         m.removeAllItems()
+        Updater.shared.checkIfStale()
+        if Updater.shared.updateAvailable {
+            let u = m.addItem(withTitle: L("menu.update.available"), action: #selector(doUpdate), keyEquivalent: "")
+            u.target = self
+            u.attributedTitle = NSAttributedString(string: L("menu.update.available"),
+                attributes: [.foregroundColor: NSColor.systemBlue,
+                             .font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
+            m.addItem(.separator())
+        }
         if !AXIsProcessTrusted() {
             m.addItem(withTitle: L("menu.needAX"), action: #selector(openAX), keyEquivalent: "").target = self
             m.addItem(.separator())
@@ -1425,6 +1437,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     var minuteActions: [MenuAction] = []
     func label(_ v: Int) -> String { v == 0 ? L("menu.off") : L("menu.minutes", "\(v)") }
+    @objc func doUpdate() { Updater.shared.runUpdate() }
     @objc func quitAll() {
         for a in quittableApps() { log(L("log.quitAll", a.localizedName ?? "?", "\(a.rgTerminate())")) }
     }
