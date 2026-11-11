@@ -492,17 +492,26 @@ final class SwitchView: NSView {
         let scale = (window?.backingScaleFactor ?? 2) * SwitchView.zoom
         let w = Int(ceil(bounds.width * scale)), h = Int(ceil(bounds.height * scale))
         guard w > 0, h > 0 else { return }
-        // 絵の置き場は IOSurface（画面に出す側が複製せずにそのまま使える置き場）。大きさが同じなら使い回す。
-        // CGImage を渡すと Core Animation が同じ大きさの複製を作り、1.5 倍表示では一時的に 30MB 以上増えていた
+        // 絵の置き場は IOSurface（画面に出す側が複製せずにそのまま使える置き場）を 2 枚持ち、交互に使う。
+        // 画面に出している最中の 1 枚をそのまま clear して描き直すと、消えてから描かれる一瞬が見えて
+        // ⌘Tab でちらつく。表示していない方（裏）に描き切ってから差し替えれば、常に完成した絵だけが出る。
+        // CGImage を渡す昔のやり方は複製が作られ、1.5 倍表示では一時的に 30MB 以上増えていた
         let cs = window?.screen?.colorSpace?.cgColorSpace ?? NSScreen.main?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
-        if surface == nil || surface!.width != w || surface!.height != h {
-            surface = IOSurface(properties: [.width: w, .height: h, .bytesPerElement: 4,
-                                             .pixelFormat: 0x42475241 /* 'BGRA' */])
-            if let sf = surface, let icc = cs.copyICCData() {
+        // 表示中の面は避け、もう片方（裏）に描く
+        let front = layer.contents as AnyObject?
+        var back = surfaces.first { $0 != nil && $0! !== front && $0!.width == w && $0!.height == h } ?? nil
+        if back == nil {
+            // 使える裏がない（初回・大きさ変更）ので、表示中でない枠に新しく作る
+            let sf = IOSurface(properties: [.width: w, .height: h, .bytesPerElement: 4,
+                                            .pixelFormat: 0x42475241 /* 'BGRA' */])
+            if let sf, let icc = cs.copyICCData() {
                 IOSurfaceSetValue(unsafeBitCast(sf, to: IOSurfaceRef.self), kIOSurfaceColorSpace, icc)
             }
+            if let i = surfaces.firstIndex(where: { $0 == nil || $0! !== front }) { surfaces[i] = sf }
+            else { surfaces = [sf, nil] }
+            back = sf
         }
-        guard let sf = surface else { return }
+        guard let sf = back else { return }
         if SwitchView.debugSize { log("一覧の絵 \(w)×\(h) = \(sf.allocationSize / 1_048_576) MB") }
         sf.lock(options: [], seed: nil)
         defer { sf.unlock(options: [], seed: nil) }
@@ -522,14 +531,12 @@ final class SwitchView: NSView {
         layer.masksToBounds = true
         layer.borderWidth = SwitchView.zoom
         effectiveAppearance.performAsCurrentDrawingAppearance { layer.borderColor = NSColor.separatorColor.cgColor }
-        // 同じ置き場に描き直したときは「中身が変わった」と知らせる（公開されていないので、あるときだけ）
-        let changed = Selector(("setContentsChanged"))
-        if layer.contents as AnyObject? === sf, layer.responds(to: changed) { layer.perform(changed) }
-        else { layer.contents = nil; layer.contents = sf }
+        // 描き切った裏を表に出す（別の面なので、消える一瞬が出ない）
+        layer.contents = sf
     }
-    /// 一覧の絵の置き場（隠したら捨てる）
-    var surface: IOSurface?
-    func dropSurface() { layer?.contents = nil; surface = nil }
+    /// 一覧の絵の置き場（2 枚で交互に使う。隠したら捨てる）
+    var surfaces: [IOSurface?] = [nil, nil]
+    func dropSurface() { layer?.contents = nil; surfaces = [nil, nil] }
 
     /// マウスを乗せている項目（薄く強調し、ボタンを出す）
     private var hover: Int?
