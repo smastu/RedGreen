@@ -59,11 +59,11 @@ final class Updater {
             let build = Updater.run("/bin/zsh", [repo + "/build.sh"], repo: repo)
             log("アップデート: build \(build ?? "")")
             DispatchQueue.main.async {
-                // 1 秒後に自分を開き直してから終了（新しい実行ファイルで立ち上がる）
-                let app = Bundle.main.bundlePath
+                // 終了を待ってから自分を開き直す（新しい実行ファイルで立ち上がる。-n なしなので 2 つにならない）
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/bin/sh")
-                p.arguments = ["-c", "sleep 1; /usr/bin/open -n \"\(app)\""]
+                p.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; sleep 0.3; /usr/bin/open -g -a \"$0\"",
+                               Bundle.main.bundlePath, "\(ProcessInfo.processInfo.processIdentifier)"]
                 try? p.run()
                 NSApp.terminate(nil)
             }

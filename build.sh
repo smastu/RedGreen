@@ -4,7 +4,7 @@ set -e
 cd "${0:a:h}"
 APP="$HOME/Applications/RedGreen.app"
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift FinderAE.swift Recycle.swift PathBarGoTo.swift KeepAlive.swift Update.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
+swiftc -O -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 main.swift Switcher.swift FinderBar.swift Cut.swift Complete.swift FinderAE.swift Recycle.swift PathBarGoTo.swift KeepAlive.swift Update.swift Lnk.swift -F/System/Library/PrivateFrameworks -framework SkyLight -o build/RedGreen
 cp build/RedGreen "$APP/Contents/MacOS/.RedGreen.new"
 mv -f "$APP/Contents/MacOS/.RedGreen.new" "$APP/Contents/MacOS/RedGreen"
 [ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -23,6 +23,19 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSAppleEventsUsageDescription</key><string>Finder のアドレス欄に今のフォルダを表示・移動するために使います / Used to show and change the current Finder folder in the address bar.</string>
+<key>CFBundleDocumentTypes</key><array><dict>
+  <key>CFBundleTypeName</key><string>Windows Shortcut</string>
+  <key>CFBundleTypeRole</key><string>Viewer</string>
+  <key>LSHandlerRank</key><string>Default</string>
+  <key>CFBundleTypeExtensions</key><array><string>lnk</string><string>LNK</string></array>
+  <key>LSItemContentTypes</key><array><string>com.microsoft.windows-shortcut</string><string>dyn.ah62d4rv4ge8025xp</string></array>
+</dict></array>
+<key>UTImportedTypeDeclarations</key><array><dict>
+  <key>UTTypeIdentifier</key><string>com.microsoft.windows-shortcut</string>
+  <key>UTTypeDescription</key><string>Windows Shortcut</string>
+  <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+  <key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>lnk</string><string>LNK</string></array></dict>
+</dict></array>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>RGBuiltCommit</key><string>$(git rev-parse --short HEAD 2>/dev/null || echo unknown)</string>
 <key>RGRepoDir</key><string>$PWD</string>
@@ -34,4 +47,5 @@ if security find-identity 2>/dev/null | grep -q "Shimpei Local Code Signing"; th
 else
   codesign --force --sign - "$APP"
 fi
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" 2>/dev/null || true
 echo built "$APP"

@@ -61,6 +61,25 @@ struct LangPack {
 
 enum Lang {
     static let en: [String: String] = [
+        "lnk.title": "%@",
+        "lnk.kind": "Type: %@",
+        "lnk.folder": "Folder",
+        "lnk.file": "File",
+        "lnk.win": "Windows target:\n%@",
+        "lnk.rel": "Relative path:\n%@",
+        "lnk.machine": "Created on: %@",
+        "lnk.mac": "Path on this Mac (found):\n%@",
+        "lnk.byName": "Not at the original place. Found by name:\n%@",
+        "lnk.byName.more": "(%@ items with the same name; showing the closest match)",
+        "lnk.notFound": "Path on this Mac:\n(not found)",
+        "lnk.btn.finder": "Open in Finder",
+        "lnk.btn.copy": "Copy Path",
+        "lnk.btn.cancel": "Cancel",
+        "lnk.btn.copyWin": "Copy Windows Path",
+        "lnk.btn.close": "Close",
+        "lnk.err.read": "Could not read the file.",
+        "lnk.err.format": "This is not a valid Windows shortcut (.lnk) file.",
+        "lnk.err.broken": "The shortcut file is damaged.",
         "menu.layout.left": "Left Half",
         "menu.layout.right": "Right Half",
         "menu.layout.fill": "Fill Screen",
@@ -155,6 +174,25 @@ enum Lang {
     ]
 
     static let ja: [String: String] = [
+        "lnk.title": "%@",
+        "lnk.kind": "種類：%@",
+        "lnk.folder": "フォルダ",
+        "lnk.file": "ファイル",
+        "lnk.win": "Windows のリンク先：\n%@",
+        "lnk.rel": "相対パス：\n%@",
+        "lnk.machine": "作成した PC：%@",
+        "lnk.mac": "この Mac での場所（見つかりました）：\n%@",
+        "lnk.byName": "元の場所にはありません。名前で探して見つけた候補：\n%@",
+        "lnk.byName.more": "（同じ名前が %@ 件。パスがいちばん近いものを表示）",
+        "lnk.notFound": "この Mac での場所：\n（見つかりませんでした）",
+        "lnk.btn.finder": "Finder で開く",
+        "lnk.btn.copy": "パスをコピー",
+        "lnk.btn.cancel": "キャンセル",
+        "lnk.btn.copyWin": "Windows のパスをコピー",
+        "lnk.btn.close": "閉じる",
+        "lnk.err.read": "ファイルを読み込めませんでした。",
+        "lnk.err.format": "Windows のショートカット（.lnk）ではありません。",
+        "lnk.err.broken": "ショートカットのファイルが壊れています。",
         "menu.layout.left": "左半分",
         "menu.layout.right": "右半分",
         "menu.layout.fill": "画面いっぱい",
@@ -1318,6 +1356,12 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         status.button?.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: "RedGreen")
         let m = NSMenu(); m.delegate = self; status.menu = m
+        Lnk.claimDefaultOnce()
+        defer {
+            launched = true
+            let urls = pendingOpen; pendingOpen = []
+            if !urls.isEmpty { DispatchQueue.main.async { Lnk.open(urls) } }
+        }
         if UserDefaults.standard.object(forKey: "loginSet") == nil {
             setLogin(true); UserDefaults.standard.set(true, forKey: "loginSet")
         }
@@ -1559,6 +1603,14 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleConfirmDelete() { CutPaste.confirmDelete.toggle() }
     @objc func toggleFinderBar() { FinderBar.enabled.toggle(); FinderBar.shared.settingChanged() }
     @objc func togglePathBarGoTo() { PathBarGoTo.enabled.toggle() }
+    /// .lnk をダブルクリックしたとき（RedGreen が .lnk の既定のアプリ）
+    /// 起動の途中に届いたときは、起動が終わってから出す（ダイアログで起動の処理を止めないように）
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        if launched { DispatchQueue.main.async { Lnk.open(urls) } } else { pendingOpen += urls }
+    }
+    var launched = false
+    var pendingOpen: [URL] = []
+
     func applicationWillTerminate(_ n: Notification) { Switcher.shared.restoreSystemHotKeys() }
     @objc func toggleGreen() { Prefs.green.toggle() }
     @objc func toggleQuit() { Prefs.quitLast.toggle() }

@@ -41,7 +41,9 @@ final class Recycler {
         log(L("log.recycle", String(format: "%.0f", mb), String(format: "%.0f", limitMB)))
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 1; /usr/bin/open -n -a \"$0\"", Bundle.main.bundlePath]
+        // 終わるのを待ってから -n なしで開く（待つ間に .lnk を開くなどで先に起動していれば、2 つ目を作らない）
+        p.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; sleep 0.3; /usr/bin/open -g -a \"$0\"",
+                       Bundle.main.bundlePath, "\(ProcessInfo.processInfo.processIdentifier)"]
         do { try p.run() } catch { return }
         Switcher.shared.restoreSystemHotKeys()
         exit(0)
