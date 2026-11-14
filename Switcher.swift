@@ -174,14 +174,18 @@ final class Switcher {
     private func registerHotKeys() {
         guard Switcher.enabled, hotKeyRefs.isEmpty else { return }
         if hotKeyHandler == nil {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            var specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                         EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
             InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ in
                 var hk = EventHotKeyID()
                 GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                                   MemoryLayout<EventHotKeyID>.size, nil, &hk)
-                DispatchQueue.main.async { Switcher.shared.hotKeyPressed(hk.id) }
+                let pressed = GetEventKind(ev) == UInt32(kEventHotKeyPressed)
+                DispatchQueue.main.async {
+                    if pressed { Switcher.shared.hotKeyPressed(hk.id) } else { Switcher.shared.hotKeyReleased() }
+                }
                 return noErr
-            }, 1, &spec, nil, &hotKeyHandler)
+            }, 2, &specs, nil, &hotKeyHandler)
         }
         let sig = OSType(0x52_47_53_57)   // 'RGSW'
         for (id, mods) in [(UInt32(1), cmdKey), (UInt32(2), cmdKey | shiftKey), (UInt32(3), cmdKey), (UInt32(4), cmdKey | shiftKey)] {
@@ -201,7 +205,19 @@ final class Switcher {
     fileprivate func hotKeyPressed(_ id: UInt32) {
         let back = id == 2 || id == 4
         if active { move(back ? -1 : 1) } else { begin(backward: back, sameApp: id >= 3) }
+        // ショートカットキーは押し続けても 1 回しか届かないので、キーリピートを自前で作る（システムの「リピート開始までの時間」「速度」に合わせる）
+        repeatTimer?.invalidate()
+        repeatTimer = Timer.scheduledTimer(withTimeInterval: NSEvent.keyRepeatDelay, repeats: false) { [weak self] _ in
+            guard let self, self.active else { return }
+            self.repeatTimer = Timer.scheduledTimer(withTimeInterval: max(0.03, NSEvent.keyRepeatInterval), repeats: true) { [weak self] t in
+                guard let self, self.active else { t.invalidate(); return }
+                self.move(back ? -1 : 1)
+            }
+        }
     }
+
+    private var repeatTimer: Timer?
+    fileprivate func hotKeyReleased() { repeatTimer?.invalidate(); repeatTimer = nil }
 
     func restoreSystemHotKeys() {
         _ = CGSSetSymbolicHotKeyEnabled(1, true)
@@ -570,7 +586,9 @@ final class SwitchView: NSView {
         // 入りきらないときは、選んでいる位置が見えるように列単位でずらす
         if selected < first { first = (selected / rows) * rows }
         if selected >= first + capacity { first = (selected / rows - cols + 1) * rows }
-        first = max(0, min(first, max(0, items.count - capacity)))
+        // 上限は列単位で切り上げる（切り捨てると、最後の列に入るはずの数件が出てこなかった）
+        let lastFirst = cols == 2 ? (max(0, items.count - capacity) + rows - 1) / rows * rows : max(0, items.count - capacity)
+        first = max(0, min(first, lastFirst))
         if cols == 2 { first = (first / rows) * rows }
         setFrameSize(fittingSize)
         setBoundsSize(layoutSize)                 // 中は 1 倍の座標のまま（描画・クリックの位置）、見た目だけ zoom 倍
