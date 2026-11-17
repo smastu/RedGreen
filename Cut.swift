@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon
 
 /// Finder で ⌘X → ⌘V をファイルの「移動」にする（Command X の代わり）
 /// ⌘X で Finder の「コピー」を押して印を付け、次の ⌘V で「ここに項目を移動」（⌥⌘V）を押す（メニューは AX で押す）。
@@ -38,31 +39,90 @@ final class CutPaste {
         let key = e.getIntegerValueField(.keyboardEventKeycode)
         switch key {
         case 7:   // X
-            if isTyping(front.processIdentifier) { return false }
-            let pid = front.processIdentifier
-            DispatchQueue.main.async {
-                // Finder の「編集 → コピー」を押す（キーを作って送るより確実）
-                guard self.pressMenu(pid, char: "C", mods: 0) else { NSSound.beep(); return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    let pb = NSPasteboard.general
-                    let hasFiles = pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
-                    self.pending = hasFiles ? pb.changeCount : nil
-                }
-            }
-            return true
+            return cut(front.processIdentifier)
         case 9:   // V
-            guard let p = pending, NSPasteboard.general.changeCount == p, !isTyping(front.processIdentifier) else {
-                return false
-            }
-            pending = nil
-            let pid = front.processIdentifier
-            DispatchQueue.main.async {
-                // 「編集 → ここに項目を移動」（⌥⌘V）。見つからなければふつうのペースト
-                if !self.pressMenu(pid, char: "V", mods: 2) { _ = self.pressMenu(pid, char: "V", mods: 0) }
-            }
-            return true
+            return paste(front.processIdentifier)
         default:
             return false
+        }
+    }
+
+    /// ⌘X：Finder の「編集 → コピー」を押して切り取りの印を付ける。文字の入力中なら false（ふつうの ⌘X）
+    private func cut(_ pid: pid_t) -> Bool {
+        if isTyping(pid) { return false }
+        DispatchQueue.main.async {
+            // Finder の「編集 → コピー」を押す（キーを作って送るより確実）
+            guard self.pressMenu(pid, char: "C", mods: 0) else { NSSound.beep(); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let pb = NSPasteboard.general
+                let hasFiles = pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+                self.pending = hasFiles ? pb.changeCount : nil
+            }
+        }
+        return true
+    }
+
+    /// ⌘V：切り取りの印があれば「ここに項目を移動」。印が無い・文字の入力中なら false（ふつうの ⌘V）
+    private func paste(_ pid: pid_t) -> Bool {
+        guard let p = pending, NSPasteboard.general.changeCount == p, !isTyping(pid) else { return false }
+        pending = nil
+        DispatchQueue.main.async {
+            // 「編集 → ここに項目を移動」（⌥⌘V）。見つからなければふつうのペースト
+            if !self.pressMenu(pid, char: "V", mods: 2) { _ = self.pressMenu(pid, char: "V", mods: 0) }
+        }
+        return true
+    }
+
+    // MARK: セキュア入力の間（パスワード欄・Chrome リモート デスクトップなど）はキーがイベントタップに届かないので、
+    // Finder が前面のときだけ ⌘X・⌘V をショートカットキーとして受ける
+    private var hotKeyRefs: [EventHotKeyRef] = []
+    private var hotKeyHandler: EventHandlerRef?
+    private var activateObserver: NSObjectProtocol?
+    static let hotKeySig = OSType(0x52_47_43_58)   // 'RGCX'
+
+    /// セキュア入力の入り切り・前面のアプリが変わったときに呼ぶ
+    func updateHotKeys() {
+        if activateObserver == nil {
+            activateObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+                CutPaste.shared.updateHotKeys()
+            }
+        }
+        let want = CutPaste.enabled && AXIsProcessTrusted() && IsSecureEventInputEnabled()
+            && NSWorkspace.shared.frontmostApplication?.bundleIdentifier == finderID
+        if want == !hotKeyRefs.isEmpty { return }
+        if !want {
+            hotKeyRefs.forEach { UnregisterEventHotKey($0) }
+            hotKeyRefs.removeAll()
+            return
+        }
+        if hotKeyHandler == nil {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ in
+                var hk = EventHotKeyID()
+                GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &hk)
+                guard hk.signature == CutPaste.hotKeySig else { return OSStatus(eventNotHandledErr) }
+                DispatchQueue.main.async { CutPaste.shared.hotKeyPressed(hk.id) }
+                return noErr
+            }, 1, &spec, nil, &hotKeyHandler)
+        }
+        for (id, key) in [(UInt32(1), UInt32(kVK_ANSI_X)), (UInt32(2), UInt32(kVK_ANSI_V))] {
+            var ref: EventHotKeyRef?
+            if RegisterEventHotKey(key, UInt32(cmdKey), EventHotKeyID(signature: CutPaste.hotKeySig, id: id),
+                                   GetApplicationEventTarget(), 0, &ref) == noErr, let ref { hotKeyRefs.append(ref) }
+        }
+        log(L("log.cutHotKey"))
+    }
+
+    /// ショートカットキーで受けた ⌘X・⌘V。移動にしないときは、Finder の「切り取り」「ペースト」をメニューで押す（キーは横取りしたので）
+    private func hotKeyPressed(_ id: UInt32) {
+        guard let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier == finderID else { return }
+        let pid = front.processIdentifier
+        if id == 1 {
+            if !cut(pid) { _ = pressMenu(pid, char: "X", mods: 0) }
+        } else {
+            if !paste(pid) { _ = pressMenu(pid, char: "V", mods: 0) }
         }
     }
 

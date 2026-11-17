@@ -159,6 +159,7 @@ final class Switcher {
             guard let self else { return }
             let on = IsSecureEventInputEnabled()
             guard on != self.lastSecure else { return }
+            CutPaste.shared.updateHotKeys()
             self.lastSecure = on
             if on, self.active { self.cancel() }
             if on { self.registerHotKeys() } else { self.unregisterHotKeys() }
@@ -180,6 +181,7 @@ final class Switcher {
                 var hk = EventHotKeyID()
                 GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                                   MemoryLayout<EventHotKeyID>.size, nil, &hk)
+                guard hk.signature == OSType(0x52_47_53_57) else { return OSStatus(eventNotHandledErr) }   // 'RGSW' 以外（⌘X・⌘V）は CutPaste へ
                 let pressed = GetEventKind(ev) == UInt32(kEventHotKeyPressed)
                 DispatchQueue.main.async {
                     if pressed { Switcher.shared.hotKeyPressed(hk.id) } else { Switcher.shared.hotKeyReleased() }
@@ -230,7 +232,14 @@ final class Switcher {
         let flags = e.flags
         if type == .flagsChanged {
             if active && !searching && !flags.contains(.maskCommand) {
-                DispatchQueue.main.async { self.confirm() }
+                let key = e.getIntegerValueField(.keyboardEventKeycode)
+                if key == 54 || key == 55 {                      // ⌘ を離した
+                    DispatchQueue.main.async { self.confirm() }
+                } else {
+                    // ⌘ を離したのを取りこぼしたまま、あとで ⌥ などを押した：ここで確定すると古い選択に切り替わり、
+                    // 前面の窓（Finder など）が消えたように見える。確定せずに取り消す
+                    DispatchQueue.main.async { log(L("log.switchStale", "\(key)")); self.cancel() }
+                }
             }
             return false
         }
@@ -306,6 +315,7 @@ final class Switcher {
         guard !items.isEmpty else { return }
         index = items.count > 1 ? (backward ? items.count - 1 : 1) : 0
         active = true
+        watchCommandKey()
         // すぐ離したときは一覧を出さない（ちらつき防止）
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, self.active else { return }
@@ -371,7 +381,24 @@ final class Switcher {
         }
     }
 
+    /// ⌘ を離した知らせが届かないこと（セキュア入力の入り切りの間など）があるので、実際のキーの状態も見る。
+    /// 離れていたら、知らせが届いたときと同じく確定する
+    private var cmdTimer: Timer?
+    private func watchCommandKey() {
+        cmdTimer?.invalidate()
+        cmdTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] t in
+            guard let self, self.active else { t.invalidate(); return }
+            if self.searching { return }
+            if !CGEventSource.flagsState(.combinedSessionState).contains(.maskCommand) {
+                t.invalidate()
+                log(L("log.switchMissedRelease"))
+                self.confirm()
+            }
+        }
+    }
+
     private func cancel() {
+        cmdTimer?.invalidate(); cmdTimer = nil
         active = false
         searching = false
         hidePanel()
@@ -379,6 +406,7 @@ final class Switcher {
 
     func confirm() {
         guard active else { return }
+        cmdTimer?.invalidate(); cmdTimer = nil
         active = false
         searching = false
         hidePanel()

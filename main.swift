@@ -158,6 +158,9 @@ enum Lang {
         "why.cmdW": "⌘W",
         "log.secureOn": "Secure input is on (password field, remote desktop, etc.): using the standard ⌘Tab for now",
         "log.secureOff": "Secure input is off: ⌘Tab switches windows again",
+        "log.switchStale": "⌘Tab: a modifier key (%@) changed after the ⌘ release was missed — cancelled instead of switching",
+        "log.switchMissedRelease": "⌘Tab: ⌘ release was not delivered — switched on the actual key state",
+        "log.cutHotKey": "Secure input is on and Finder is in front: ⌘X / ⌘V are received as hotkeys",
         "log.secureOnHotKey": "Secure input is on: ⌘Tab now works via a hotkey (arrows and letter keys are unavailable meanwhile)",
         "log.recycle": "Memory %@ MB (over %@ MB) and idle: restarting to return memory",
         "log.launch": "Launched (permission=%@)",
@@ -271,6 +274,9 @@ enum Lang {
         "why.cmdW": "⌘W",
         "log.secureOn": "セキュア入力がオン（パスワード欄・リモートデスクトップなど）：その間は標準の ⌘Tab に戻す",
         "log.secureOff": "セキュア入力がオフ：⌘Tab の窓切り替えに戻した",
+        "log.switchStale": "⌘Tab：⌘ を離したのを取りこぼしたあとに修飾キー（%@）が変わった → 切り替えずに取り消した",
+        "log.switchMissedRelease": "⌘Tab：⌘ を離した知らせが届かなかった → 実際のキーの状態で確定した",
+        "log.cutHotKey": "セキュア入力がオンで Finder が前面：⌘X・⌘V はショートカットキーで受ける",
         "log.secureOnHotKey": "セキュア入力がオン：⌘Tab はショートカットキーで受ける（その間は矢印・文字キーの操作は使えない）",
         "log.recycle": "メモリ %@ MB（%@ MB 超え）で使っていないので、メモリを返すため起動し直す",
         "log.launch": "起動 許可=%@",
@@ -1596,7 +1602,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func toggleYellow() { Prefs.yellow.toggle() }
     @objc func toggleYellowHover() { Prefs.yellowHover.toggle() }
     @objc func toggleRed() { Prefs.red.toggle() }
-    @objc func toggleCut() { CutPaste.enabled.toggle() }
+    @objc func toggleCut() { CutPaste.enabled.toggle(); CutPaste.shared.updateHotKeys() }
     @objc func toggleDockMin() { Prefs.dockMin.toggle() }
     @objc func toggleDockFinder() { Prefs.dockFinder.toggle() }
     @objc func toggleWinKeys() { CutPaste.winKeys.toggle() }
