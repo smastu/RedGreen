@@ -467,11 +467,31 @@ func setFrame(_ w: AXUIElement, _ r: CGRect, retries: Int = 4, done: ((CGRect) -
     AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
     AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv)
     AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
-    // Finder などは反映が遅れて取りこぼすことがあるので、少し待って確かめ、ずれていればやり直す
+    settle(w, r, retries: retries, last: nil, done: done)
+}
+
+/// Finder などは反映が遅れて取りこぼすことがあるので、少し待って確かめ、ずれていればやり直す。
+/// Excel などはゆっくり動くので、動いている途中で置き直すと上下に跳ねる。止まるのを待ってから判断する
+private func settle(_ w: AXUIElement, _ r: CGRect, retries: Int, last: CGRect?, waits: Int = 0, done: ((CGRect) -> Void)?) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
         guard let cur = currentFrame(w) else { return }
-    if retries > 0, !approx(cur, r) { setFrame(w, r, retries: retries - 1, done: done) }
-        else { done?(cur) }
+        if approx(cur, r) { done?(cur); return }
+        if let last, cur != last, waits < 10 {                 // まだ動いている → もう少し待つ（最大 2 秒）
+            settle(w, r, retries: retries, last: cur, waits: waits + 1, done: done); return
+        }
+        if last == nil, waits == 0 {                             // 1 回目：止まったか確かめるため、もう一度だけ見る
+            settle(w, r, retries: retries, last: cur, waits: 1, done: done); return
+        }
+        guard retries > 0 else {
+            log("窓の配置：思った大きさにならない（目標 \(r.debugDescription)、実際 \(cur.debugDescription)）")
+            done?(cur); return
+        }
+        var p = r.origin, s = r.size
+        let pv = AXValueCreate(.cgPoint, &p)!, sv = AXValueCreate(.cgSize, &s)!
+        AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
+        AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, sv)
+        AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pv)
+        settle(w, r, retries: retries - 1, last: nil, done: done)
     }
 }
 
@@ -736,9 +756,9 @@ let tapBody: CGEventTapCallBack = { _, type, event, _ in
         if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         return Unmanaged.passUnretained(event)
     }
-    if type == .keyDown { KeepAlive.shared.keyDown(event) }
+    if type == .keyDown { KeepAlive.shared.keyDown(event); PathBarGoTo.keyPressed() }
     if (type == .keyDown || type == .flagsChanged) && Switcher.shared.handle(type, event) { return nil }
-    if type == .flagsChanged { return Unmanaged.passUnretained(event) }
+    if type == .flagsChanged { PathBarGoTo.keyPressed(); return Unmanaged.passUnretained(event) }
     if type == .keyDown { memMark("キー入力") }
     if type == .keyDown && CutPaste.shared.handle(event) { return nil }
     if type == .leftMouseUp && swallowUp {

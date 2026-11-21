@@ -31,11 +31,17 @@ enum PathBarGoTo {
     }
 
     // マウスオーバー：パスバーの空いているところに hoverDelay 秒止めたら開く（離れるまで出し直さない）
-    static let hoverDelay: TimeInterval = 0.1
+    static let hoverDelay: TimeInterval = 0.4
     private static var hoverDone = false
+    private static var lastKey = Date.distantPast
     static func mouseMoved() { hoverDone = false }
+    /// キーを押した（⌘X などの操作中）：マウスがたまたまパスバーの上にあっても、動かすまでは開かない
+    static func keyPressed() { hoverDone = true; lastKey = Date() }
     static func hover(_ p: CGPoint, rest: TimeInterval) {
-        guard enabled, !hoverDone, rest > hoverDelay, NSEvent.pressedMouseButtons == 0 else { return }
+        guard enabled, !hoverDone, rest > hoverDelay, NSEvent.pressedMouseButtons == 0,
+              Date().timeIntervalSince(lastKey) > 1.0,
+              CGEventSource.flagsState(.combinedSessionState).intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
+        else { return }
         hoverDone = true
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success, let e = el else { return }
